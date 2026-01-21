@@ -1,3 +1,3 @@
 module github.com/lpg-it/go-antidetect
 
-go 1.24
+go 1.24.0

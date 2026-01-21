@@ -21,7 +21,10 @@ go get github.com/lpg-it/go-antidetect
 
 ## Requirements
 
-- Go 1.21 or higher
+- **Go 1.24.0 or higher** - Uses modern Go features:
+  - `max()` builtin function (Go 1.21+)
+  - `for range int` syntax (Go 1.22+)
+  - Latest toolchain optimizations (Go 1.24+)
 - BitBrowser client running with API enabled (default: `http://127.0.0.1:54345`)
 
 ## Quick Start
