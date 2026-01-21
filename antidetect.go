@@ -60,6 +60,28 @@ type BitBrowserOption = bitbrowser.ClientOption
 // Note: Timeouts should be controlled via context.Context, not HTTP client timeout.
 var WithHTTPClient = bitbrowser.WithHTTPClient
 
+// WithAPIKey sets the API key for authentication.
+// The key will be sent in the "x-api-key" header with each request.
+// You can find your API key in BitBrowser settings.
+//
+// Example:
+//
+//	client := antidetect.NewBitBrowser(apiURL, antidetect.WithAPIKey("56d2b7c905"))
+var WithAPIKey = bitbrowser.WithAPIKey
+
+// WithLogger sets the logger for the client.
+// If nil, logging is disabled.
+var WithLogger = bitbrowser.WithLogger
+
+// WithRetry is a convenience option to enable retries with default settings.
+// maxAttempts specifies the maximum number of attempts (including the initial attempt).
+// For example, WithRetry(3) means 1 initial attempt + 2 retries.
+var WithRetry = bitbrowser.WithRetry
+
+// WithRetryConfig sets the retry configuration for the client.
+// If nil, no retries will be performed (MaxAttempts=1).
+var WithRetryConfig = bitbrowser.WithRetryConfig
+
 // NewBitBrowser creates a new BitBrowser client.
 // apiURL should be the BitBrowser API endpoint, e.g., "http://127.0.0.1:54345".
 //
@@ -134,6 +156,55 @@ type Display = bitbrowser.Display
 
 // Rect represents a rectangle area.
 type Rect = bitbrowser.Rect
+
+// RetryConfig configures the retry behavior.
+type RetryConfig = bitbrowser.RetryConfig
+
+// DefaultRetryConfig returns a RetryConfig with sensible defaults.
+// By default, MaxAttempts is 1 (no retries) for backward compatibility.
+var DefaultRetryConfig = bitbrowser.DefaultRetryConfig
+
+// ============================================================================
+// Error Types
+// ============================================================================
+
+// Sentinel errors for error type checking using errors.Is().
+var (
+	// ErrNetwork indicates a network-level error (connection, DNS, etc.).
+	ErrNetwork = bitbrowser.ErrNetwork
+
+	// ErrAPI indicates an API-level error (non-2xx response, business logic error).
+	ErrAPI = bitbrowser.ErrAPI
+
+	// ErrValidation indicates a validation error (invalid input).
+	ErrValidation = bitbrowser.ErrValidation
+
+	// ErrTimeout indicates a timeout error.
+	ErrTimeout = bitbrowser.ErrTimeout
+
+	// ErrRetryExhausted indicates all retry attempts have been exhausted.
+	ErrRetryExhausted = bitbrowser.ErrRetryExhausted
+)
+
+// NetworkError represents a network-level error.
+type NetworkError = bitbrowser.NetworkError
+
+// APIError represents an API-level error from BitBrowser.
+type APIError = bitbrowser.APIError
+
+// ValidationError represents an input validation error.
+type ValidationError = bitbrowser.ValidationError
+
+// TimeoutError represents a timeout error.
+type TimeoutError = bitbrowser.TimeoutError
+
+// RetryError represents an error after all retry attempts have been exhausted.
+type RetryError = bitbrowser.RetryError
+
+// IsRetryable determines if an error is retryable.
+// Network errors and certain HTTP status codes are considered retryable.
+// API business logic errors (e.g., "profile not found") are not retryable.
+var IsRetryable = bitbrowser.IsRetryable
 
 // ============================================================================
 // Constants
