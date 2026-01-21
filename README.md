@@ -10,7 +10,7 @@ Go SDK for controlling antidetect browsers. Provides a unified interface to inte
 
 | Browser | Status | Version |
 |---------|--------|---------|
-| [BitBrowser](https://www.bitbrowser.cn/) (比特浏览器) | ✅ Fully Supported | v1.1.1 |
+| [BitBrowser](https://www.bitbrowser.cn/) (比特浏览器) | ✅ Fully Supported | v1.0.0 |
 | [AdsPower](https://www.adspower.com/) | 🚧 Coming Soon | - |
 
 ## Installation
@@ -43,7 +43,10 @@ import (
 
 func main() {
     // Create client - single import, no sub-packages needed!
-    client := antidetect.NewBitBrowser("http://127.0.0.1:54345")
+    client, err := antidetect.NewBitBrowser("http://127.0.0.1:54345")
+    if err != nil {
+        log.Fatal(err)
+    }
 
     // Control timeout via context (recommended approach)
     ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -125,13 +128,32 @@ result, err := client.Open(ctx, profileID, &antidetect.OpenOptions{
 For advanced scenarios, you can provide a custom HTTP client:
 
 ```go
-client := antidetect.NewBitBrowser(apiURL, antidetect.WithHTTPClient(&http.Client{
+client, err := antidetect.NewBitBrowser(apiURL, antidetect.WithHTTPClient(&http.Client{
     Transport: &http.Transport{
         MaxIdleConns:       10,
         IdleConnTimeout:    90 * time.Second,
         DisableCompression: true,
     },
 }))
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### Managed Mode (Remote/Distributed Control)
+
+For controlling browsers remotely across multiple machines, use Managed Mode:
+
+```go
+// Multiple machines (A, C, D, E) can connect to BitBrowser on machine B
+// SDK automatically allocates ports from the range and probes remote availability
+client, err := antidetect.NewBitBrowser("http://192.168.1.100:54345",
+    antidetect.WithPortRange(50000, 51000), // Enable Managed Mode
+    antidetect.WithAPIKey("your-api-key"),
+)
+if err != nil {
+    log.Fatal(err)
+}
 ```
 
 ## Features

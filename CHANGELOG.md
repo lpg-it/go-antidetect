@@ -5,108 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.1] - 2025-01-21
-
-### Fixed
-
-- **Removed hardcoded 60s HTTP timeout** - Timeouts are now controlled by user via `context.Context`
-  - This is the Go-standard approach for timeout control
-  - Users should use `context.WithTimeout()` to set request timeouts
-  - For special cases, use `WithHTTPClient()` option to customize the HTTP client
-
-### Added
-
-- `WithHTTPClient` option for customizing the underlying HTTP client
-- `BitBrowserOption` type for client configuration
-
-## [1.1.0] - 2025-01-21
-
-### Added
-
-- **OpenOptions** - New convenient way to open browsers with common settings:
-  - `Headless` - Run browser in headless mode
-  - `AllowLAN` - Allow LAN/remote access (adds --remote-debugging-address=0.0.0.0)
-  - `Incognito` - Open in incognito/private mode
-  - `IgnoreDefaultUrls` - Start with blank page
-  - `StartURL` - Specify initial URL
-  - `CustomPort` - Fixed debugging port
-  - `DisableGPU` - Disable GPU acceleration
-  - `LoadExtensions` - Load browser extensions
-  - `ExtraArgs` - Additional Chrome arguments
-  - `WaitReady` - Wait for browser to be fully ready
-  - `WaitTimeout` - Custom timeout for waiting
-
-- **VerifyDebugURL** - Verify if a browser debug URL is still accessible
-- **GetBrowserVersion** - Get browser version information via CDP
-- **WaitForReady** - Wait until browser is fully ready
-- **OpenRaw** - Low-level API access for full control
-
-### Changed
-
-- `Open` method now uses `OpenOptions` for convenient configuration
-- Removed `OpenWithPort` (use `Open` with `OpenOptions{CustomPort: port}` instead)
-
 ## [1.0.0] - 2025-01-21
 
 ### Added
 
-- Initial release with full BitBrowser API support
-- **Profile Management**
-  - `CreateProfile` - Create new browser profiles
-  - `UpdateProfile` - Update existing profiles
-  - `UpdateProfilePartial` - Batch partial updates
-  - `GetProfileDetail` - Get profile details
-  - `ListProfiles` - Paginated profile listing
-  - `DeleteProfile` - Delete single profile
-  - `DeleteProfiles` - Batch delete profiles
-  - `ResetClosingState` - Reset stuck browser state
+- **Full BitBrowser API Support**
+  - Profile Management: Create, update, delete, list profiles
+  - Browser Control: Open, close, manage browser instances
+  - Process Management: Get PIDs, ports, alive status
+  - Proxy Management: Configure and check proxies
+  - Cookie Management: Set, get, clear, format cookies
+  - Window Management: Arrange windows in grid/diagonal layout
+  - Cache Management: Clear cache with extension preservation option
+  - RPA Control: Run and stop RPA tasks
 
-- **Browser Control**
-  - `Open` - Open browser with full configuration
-  - `OpenWithPort` - Convenience method for custom debug port
-  - `Close` - Close browser instance
-  - `CloseBySeqs` - Close by sequence numbers
-  - `CloseAll` - Close all browsers
+- **OpenOptions** - Convenient way to open browsers:
+  - `Headless`, `AllowLAN`, `Incognito`, `IgnoreDefaultUrls`
+  - `WaitReady` with configurable `WaitTimeout` and `PollInterval`
+  - `CustomPort`, `DisableGPU`, `LoadExtensions`, `ExtraArgs`
 
-- **Process Management**
-  - `GetPIDs` - Get process IDs
-  - `GetAllPIDs` - Get all running PIDs
-  - `GetAlivePIDs` - Get alive process IDs
-  - `GetPorts` - Get debugging ports
+- **Connection Verification**
+  - `VerifyDebugURL` - Check if debug URL is accessible
+  - `GetBrowserVersion` - Get browser version via CDP
+  - `WaitForReady` - Wait until browser is fully ready
 
-- **Proxy Management**
-  - `UpdateProxy` - Batch update proxy settings
-  - `CheckProxy` - Check proxy connectivity
+- **Managed Mode** for remote/distributed browser control:
+  - `WithPortRange(min, max)` - Enable SDK-managed port allocation
+  - Automatic port probing on remote BitBrowser host
+  - Random port selection with retry on conflict
+  - Supports multiple machines accessing same BitBrowser instance
 
-- **Cookie Management**
-  - `SetCookies` - Set cookies in real-time
-  - `GetCookies` - Get current cookies
-  - `ClearCookies` - Clear cookies
-  - `FormatCookies` - Convert cookie formats
+- **Error Handling**
+  - Custom error types: `ValidationError`, `NetworkError`, `APIError`, `TimeoutError`
+  - `IsRetryable()` method for retry decisions
+  - No silent fallbacks - configuration errors fail explicitly
 
-- **Window Management**
-  - `ArrangeWindows` - Arrange by grid/diagonal layout
-  - `ArrangeWindowsFlexible` - Auto-arrange windows
+- **Retry Mechanism**
+  - `WithRetry(maxAttempts)` - Simple retry configuration
+  - `WithRetryConfig(config)` - Advanced retry with backoff and jitter
+  - Configurable retry conditions via `RetryIf` function
 
-- **Cache Management**
-  - `ClearCache` - Clear profile cache
-  - `ClearCacheExceptExtensions` - Clear cache preserving extensions
+- **Logging Support**
+  - `WithLogger(logger)` - Integrate with `slog.Logger`
+  - Request/response logging for debugging
 
-- **Other Features**
-  - `Health` - API health check
-  - `UpdateGroup` - Move profiles between groups
-  - `UpdateRemark` - Update profile remarks
-  - `RandomizeFingerprint` - Randomize browser fingerprint
-  - `GetAllDisplays` - Get monitor information
-  - `RunRPA` / `StopRPA` - RPA task control
-  - `AutoPaste` - Simulated clipboard typing
-  - `ReadExcel` / `ReadFile` - File operations
+- **API Authentication**
+  - `WithAPIKey(key)` - Set API key for authenticated requests
 
-- Full support for 50+ fingerprint configuration options
-- Comprehensive proxy configuration including dynamic IP extraction
-- Single import usage: `import antidetect "github.com/lpg-it/go-antidetect"`
+- **Flexible HTTP Client**
+  - `WithHTTPClient(client)` - Custom HTTP client configuration
+  - No hardcoded timeouts - use `context.Context` for timeout control
+
+- **50+ Fingerprint Options** - Full browser fingerprint configuration
+
+- **Single Import Usage**
+  ```go
+  import antidetect "github.com/lpg-it/go-antidetect"
+
+  client, err := antidetect.NewBitBrowser("http://127.0.0.1:54345")
+  ```
 
 ### Notes
 
+- Requires Go 1.24.0 or higher
 - Requires BitBrowser client with API enabled
 - Compatible with chromedp, playwright-go, rod, and other CDP libraries

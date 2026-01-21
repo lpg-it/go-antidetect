@@ -11,7 +11,10 @@ import (
 
 func main() {
 	// Create a BitBrowser client - single import, no sub-packages needed!
-	client := antidetect.NewBitBrowser("http://127.0.0.1:54345")
+	client, err := antidetect.NewBitBrowser("http://127.0.0.1:54345")
+	if err != nil {
+		log.Fatalf("Failed to create client: %v", err)
+	}
 
 	// Control timeout via context (recommended approach)
 	// All API calls respect this timeout - no hardcoded internal timeouts

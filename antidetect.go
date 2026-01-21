@@ -115,10 +115,19 @@ var WithPortRetries = bitbrowser.WithPortRetries
 //
 // To customize the HTTP client:
 //
-//	client := antidetect.NewBitBrowser(apiURL, antidetect.WithHTTPClient(&http.Client{
+//	client, err := antidetect.NewBitBrowser(apiURL, antidetect.WithHTTPClient(&http.Client{
 //	    Transport: customTransport,
 //	}))
-func NewBitBrowser(apiURL string, opts ...BitBrowserOption) *BitBrowserClient {
+//
+// For remote/distributed browser control, configure port management:
+//
+//	client, err := antidetect.NewBitBrowser(apiURL,
+//	    antidetect.WithPortRange(50000, 51000), // Enable Managed Mode
+//	    antidetect.WithAPIKey("your-api-key"),
+//	)
+//
+// Returns an error if Managed Mode is enabled but the API URL is invalid.
+func NewBitBrowser(apiURL string, opts ...BitBrowserOption) (*BitBrowserClient, error) {
 	return bitbrowser.New(apiURL, opts...)
 }
 
