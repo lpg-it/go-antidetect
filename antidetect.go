@@ -82,6 +82,28 @@ var WithRetry = bitbrowser.WithRetry
 // If nil, no retries will be performed (MaxAttempts=1).
 var WithRetryConfig = bitbrowser.WithRetryConfig
 
+// WithPortRange sets the port range for Managed Mode.
+// When configured, the SDK will:
+//   - Randomly select ports from the range [minPort, maxPort]
+//   - Force binding to 0.0.0.0 for remote access
+//   - Automatically retry on port conflicts
+//
+// Recommended for remote/distributed browser control:
+//
+//	client := antidetect.NewBitBrowser(apiURL, antidetect.WithPortRange(50000, 51000))
+//
+// If minPort or maxPort is 0, Managed Mode is disabled (Native Mode).
+//
+// WARNING: For cross-machine remote control, you MUST configure port range
+// to enable Managed Mode. Otherwise, the WebSocket URL (127.0.0.1) will be
+// unreachable from remote hosts. Recommended range: MinPort=50000, MaxPort=51000.
+var WithPortRange = bitbrowser.WithPortRange
+
+// WithPortRetries sets the maximum number of retry attempts for port allocation.
+// Only applicable when Managed Mode is enabled via WithPortRange.
+// Default is 10 retries.
+var WithPortRetries = bitbrowser.WithPortRetries
+
 // NewBitBrowser creates a new BitBrowser client.
 // apiURL should be the BitBrowser API endpoint, e.g., "http://127.0.0.1:54345".
 //
@@ -160,9 +182,16 @@ type Rect = bitbrowser.Rect
 // RetryConfig configures the retry behavior.
 type RetryConfig = bitbrowser.RetryConfig
 
+// PortConfig configures the port management behavior.
+// See the package documentation for detailed usage of Managed Mode vs Native Mode.
+type PortConfig = bitbrowser.PortConfig
+
 // DefaultRetryConfig returns a RetryConfig with sensible defaults.
 // By default, MaxAttempts is 1 (no retries) for backward compatibility.
 var DefaultRetryConfig = bitbrowser.DefaultRetryConfig
+
+// DefaultPortConfig returns a PortConfig with Native Mode (no port management).
+var DefaultPortConfig = bitbrowser.DefaultPortConfig
 
 // ============================================================================
 // Error Types

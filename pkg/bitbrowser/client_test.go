@@ -18,6 +18,16 @@ func mockServer(handler http.HandlerFunc) *httptest.Server {
 	return httptest.NewServer(handler)
 }
 
+// mustNew is a test helper that creates a Client and fails the test on error.
+func mustNew(t *testing.T, apiURL string, opts ...ClientOption) *Client {
+	t.Helper()
+	client, err := New(apiURL, opts...)
+	if err != nil {
+		t.Fatalf("New(%q) failed: %v", apiURL, err)
+	}
+	return client
+}
+
 // successResponse creates a successful BitBrowser API response.
 func successResponse(data any) []byte {
 	resp := Response{
@@ -43,7 +53,7 @@ func errorResponse(msg string) []byte {
 
 func TestNew(t *testing.T) {
 	t.Run("creates client with default settings", func(t *testing.T) {
-		client := New("http://localhost:54345")
+		client := mustNew(t,"http://localhost:54345")
 
 		if client.apiURL != "http://localhost:54345" {
 			t.Errorf("apiURL = %q, want %q", client.apiURL, "http://localhost:54345")
@@ -60,7 +70,7 @@ func TestNew(t *testing.T) {
 	})
 
 	t.Run("trims trailing slash from URL", func(t *testing.T) {
-		client := New("http://localhost:54345/")
+		client := mustNew(t,"http://localhost:54345/")
 
 		if client.apiURL != "http://localhost:54345" {
 			t.Errorf("apiURL = %q, want %q", client.apiURL, "http://localhost:54345")
@@ -69,7 +79,7 @@ func TestNew(t *testing.T) {
 
 	t.Run("applies WithHTTPClient option", func(t *testing.T) {
 		customClient := &http.Client{Timeout: 5 * time.Second}
-		client := New("http://localhost:54345", WithHTTPClient(customClient))
+		client := mustNew(t,"http://localhost:54345", WithHTTPClient(customClient))
 
 		if client.httpClient != customClient {
 			t.Error("httpClient should be the custom client")
@@ -77,7 +87,7 @@ func TestNew(t *testing.T) {
 	})
 
 	t.Run("applies WithAPIKey option", func(t *testing.T) {
-		client := New("http://localhost:54345", WithAPIKey("test-api-key-123"))
+		client := mustNew(t,"http://localhost:54345", WithAPIKey("test-api-key-123"))
 
 		if client.apiKey != "test-api-key-123" {
 			t.Errorf("apiKey = %q, want %q", client.apiKey, "test-api-key-123")
@@ -86,7 +96,7 @@ func TestNew(t *testing.T) {
 
 	t.Run("applies WithLogger option", func(t *testing.T) {
 		logger := slog.Default()
-		client := New("http://localhost:54345", WithLogger(logger))
+		client := mustNew(t,"http://localhost:54345", WithLogger(logger))
 
 		if client.logger != logger {
 			t.Error("logger should be set")
@@ -98,7 +108,7 @@ func TestNew(t *testing.T) {
 			MaxAttempts: 5,
 			BaseDelay:   2 * time.Second,
 		}
-		client := New("http://localhost:54345", WithRetryConfig(config))
+		client := mustNew(t,"http://localhost:54345", WithRetryConfig(config))
 
 		if client.retryConfig.MaxAttempts != 5 {
 			t.Errorf("MaxAttempts = %d, want 5", client.retryConfig.MaxAttempts)
@@ -106,7 +116,7 @@ func TestNew(t *testing.T) {
 	})
 
 	t.Run("applies WithRetry convenience option", func(t *testing.T) {
-		client := New("http://localhost:54345", WithRetry(3))
+		client := mustNew(t,"http://localhost:54345", WithRetry(3))
 
 		if client.retryConfig.MaxAttempts != 3 {
 			t.Errorf("MaxAttempts = %d, want 3", client.retryConfig.MaxAttempts)
@@ -124,7 +134,7 @@ func TestHealth(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		err := client.Health(context.Background())
 
 		if err != nil {
@@ -138,7 +148,7 @@ func TestHealth(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		err := client.Health(context.Background())
 
 		if err == nil {
@@ -147,7 +157,7 @@ func TestHealth(t *testing.T) {
 	})
 
 	t.Run("network error", func(t *testing.T) {
-		client := New("http://localhost:1") // Invalid port
+		client := mustNew(t,"http://localhost:1") // Invalid port
 
 		err := client.Health(context.Background())
 
@@ -178,7 +188,7 @@ func TestCreateProfile(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		id, err := client.CreateProfile(context.Background(), ProfileConfig{
 			Name: "Test Profile",
 		})
@@ -207,7 +217,7 @@ func TestCreateProfile(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		_, err := client.CreateProfile(context.Background(), ProfileConfig{
 			Name: "Test Profile",
 		})
@@ -223,7 +233,7 @@ func TestCreateProfile(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		_, err := client.CreateProfile(context.Background(), ProfileConfig{
 			Name: "Test Profile",
 		})
@@ -241,7 +251,7 @@ func TestUpdateProfile(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		err := client.UpdateProfile(context.Background(), ProfileConfig{
 			ID:   "profile-123",
 			Name: "Updated Name",
@@ -253,7 +263,7 @@ func TestUpdateProfile(t *testing.T) {
 	})
 
 	t.Run("validation error - missing ID", func(t *testing.T) {
-		client := New("http://localhost:54345")
+		client := mustNew(t,"http://localhost:54345")
 		err := client.UpdateProfile(context.Background(), ProfileConfig{
 			Name: "Updated Name",
 		})
@@ -278,7 +288,7 @@ func TestGetProfileDetail(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		detail, err := client.GetProfileDetail(context.Background(), "profile-123")
 
 		if err != nil {
@@ -307,7 +317,7 @@ func TestListProfiles(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		result, err := client.ListProfiles(context.Background(), ListRequest{
 			Page:     0,
 			PageSize: 10,
@@ -341,7 +351,7 @@ func TestDeleteProfile(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		err := client.DeleteProfile(context.Background(), "profile-123")
 
 		if err != nil {
@@ -366,7 +376,7 @@ func TestDeleteProfiles(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		err := client.DeleteProfiles(context.Background(), []string{"profile-1", "profile-2"})
 
 		if err != nil {
@@ -385,7 +395,7 @@ func TestOpen(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		result, err := client.Open(context.Background(), "profile-123", nil)
 
 		if err != nil {
@@ -433,7 +443,7 @@ func TestOpen(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		_, err := client.Open(context.Background(), "profile-123", &OpenOptions{
 			Headless: true,
 			AllowLAN: true,
@@ -455,7 +465,7 @@ func TestClose(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		err := client.Close(context.Background(), "profile-123")
 
 		if err != nil {
@@ -474,7 +484,7 @@ func TestGetPorts(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		ports, err := client.GetPorts(context.Background())
 
 		if err != nil {
@@ -499,7 +509,7 @@ func TestGetBrowserVersion(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		version, err := client.GetBrowserVersion(context.Background(), server.URL)
 
 		if err != nil {
@@ -511,7 +521,7 @@ func TestGetBrowserVersion(t *testing.T) {
 	})
 
 	t.Run("validation error - empty endpoint", func(t *testing.T) {
-		client := New("http://localhost:54345")
+		client := mustNew(t,"http://localhost:54345")
 		_, err := client.GetBrowserVersion(context.Background(), "")
 
 		if err == nil {
@@ -533,7 +543,7 @@ func TestVerifyDebugURL(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		valid := client.VerifyDebugURL(context.Background(), server.URL)
 
 		if !valid {
@@ -547,7 +557,7 @@ func TestVerifyDebugURL(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		valid := client.VerifyDebugURL(context.Background(), server.URL)
 
 		if valid {
@@ -556,7 +566,7 @@ func TestVerifyDebugURL(t *testing.T) {
 	})
 
 	t.Run("empty URL returns false", func(t *testing.T) {
-		client := New("http://localhost:54345")
+		client := mustNew(t,"http://localhost:54345")
 		valid := client.VerifyDebugURL(context.Background(), "")
 
 		if valid {
@@ -579,7 +589,7 @@ func TestRetryBehavior(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL, WithRetry(3))
+		client := mustNew(t,server.URL, WithRetry(3))
 		err := client.Health(context.Background())
 
 		if err != nil {
@@ -599,7 +609,7 @@ func TestRetryBehavior(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL, WithRetry(3))
+		client := mustNew(t,server.URL, WithRetry(3))
 		err := client.Health(context.Background())
 
 		if err == nil {
@@ -621,7 +631,7 @@ func TestLogging(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL, WithLogger(logger))
+		client := mustNew(t,server.URL, WithLogger(logger))
 		_ = client.Health(context.Background())
 
 		logs := buf.String()
@@ -636,7 +646,7 @@ func TestLogging(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL) // No logger
+		client := mustNew(t,server.URL) // No logger
 		err := client.Health(context.Background())
 
 		if err != nil {
@@ -656,7 +666,7 @@ func TestContextCancellation(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 		defer cancel()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		err := client.Health(ctx)
 
 		if err == nil {
@@ -688,7 +698,7 @@ func TestHTTPStatusErrors(t *testing.T) {
 			})
 			defer server.Close()
 
-			client := New(server.URL)
+			client := mustNew(t,server.URL)
 			err := client.Health(context.Background())
 
 			if err == nil {
@@ -711,7 +721,7 @@ func TestSetCookies(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		err := client.SetCookies(context.Background(), "profile-123", []Cookie{
 			{Name: "session", Value: "abc123", Domain: ".example.com"},
 		})
@@ -731,7 +741,7 @@ func TestGetCookies(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		cookies, err := client.GetCookies(context.Background(), "profile-123")
 
 		if err != nil {
@@ -756,7 +766,7 @@ func TestUpdateProxy(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		err := client.UpdateProxy(context.Background(), ProxyUpdateRequest{
 			IDs:       []string{"profile-123"},
 			ProxyType: "http",
@@ -780,7 +790,7 @@ func TestClearCache(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		err := client.ClearCache(context.Background(), []string{"profile-123"})
 
 		if err != nil {
@@ -799,7 +809,7 @@ func TestRandomizeFingerprint(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		fp, err := client.RandomizeFingerprint(context.Background(), "profile-123")
 
 		if err != nil {
@@ -821,7 +831,7 @@ func TestCloseBySeqs(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		err := client.CloseBySeqs(context.Background(), []int{1, 2, 3})
 
 		if err != nil {
@@ -840,7 +850,7 @@ func TestCloseAll(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		err := client.CloseAll(context.Background())
 
 		if err != nil {
@@ -859,7 +869,7 @@ func TestGetPIDs(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		pids, err := client.GetPIDs(context.Background(), []string{"profile-1", "profile-2"})
 
 		if err != nil {
@@ -880,7 +890,7 @@ func TestGetAllPIDs(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		pids, err := client.GetAllPIDs(context.Background())
 
 		if err != nil {
@@ -901,7 +911,7 @@ func TestGetAlivePIDs(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		pids, err := client.GetAlivePIDs(context.Background(), []string{"profile-1"})
 
 		if err != nil {
@@ -923,7 +933,7 @@ func TestUpdateProfilePartial(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		err := client.UpdateProfilePartial(context.Background(), PartialUpdateRequest{
 			IDs: []string{"profile-1", "profile-2"},
 			ProfileConfig: ProfileConfig{
@@ -947,7 +957,7 @@ func TestResetClosingState(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		err := client.ResetClosingState(context.Background(), "profile-123")
 
 		if err != nil {
@@ -965,7 +975,7 @@ func TestCheckProxy(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		result, err := client.CheckProxy(context.Background(), ProxyCheckRequest{
 			Host:      "proxy.example.com",
 			Port:      8080,
@@ -991,7 +1001,7 @@ func TestUpdateGroup(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		err := client.UpdateGroup(context.Background(), "group-1", []string{"profile-1"})
 
 		if err != nil {
@@ -1010,7 +1020,7 @@ func TestUpdateRemark(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		err := client.UpdateRemark(context.Background(), "new remark", []string{"profile-1"})
 
 		if err != nil {
@@ -1029,7 +1039,7 @@ func TestArrangeWindows(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		err := client.ArrangeWindows(context.Background(), WindowBoundsRequest{
 			Type:   "box",
 			Width:  800,
@@ -1053,7 +1063,7 @@ func TestArrangeWindowsFlexible(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		err := client.ArrangeWindowsFlexible(context.Background(), []int{1, 2, 3})
 
 		if err != nil {
@@ -1072,7 +1082,7 @@ func TestClearCacheExceptExtensions(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		err := client.ClearCacheExceptExtensions(context.Background(), []string{"profile-123"})
 
 		if err != nil {
@@ -1091,7 +1101,7 @@ func TestClearCookies(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		err := client.ClearCookies(context.Background(), "profile-123", true)
 
 		if err != nil {
@@ -1109,7 +1119,7 @@ func TestFormatCookies(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		cookies, err := client.FormatCookies(context.Background(), "session=abc123", "example.com")
 
 		if err != nil {
@@ -1130,7 +1140,7 @@ func TestGetAllDisplays(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		displays, err := client.GetAllDisplays(context.Background())
 
 		if err != nil {
@@ -1152,7 +1162,7 @@ func TestRunRPA(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		err := client.RunRPA(context.Background(), "task-123")
 
 		if err != nil {
@@ -1171,7 +1181,7 @@ func TestStopRPA(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		err := client.StopRPA(context.Background(), "task-123")
 
 		if err != nil {
@@ -1190,7 +1200,7 @@ func TestAutoPaste(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		err := client.AutoPaste(context.Background(), "profile-123", "https://example.com")
 
 		if err != nil {
@@ -1209,7 +1219,7 @@ func TestReadExcel(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		result, err := client.ReadExcel(context.Background(), "/path/to/file.xlsx")
 
 		if err != nil {
@@ -1231,7 +1241,7 @@ func TestReadFile(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		content, err := client.ReadFile(context.Background(), "/path/to/file.txt")
 
 		if err != nil {
@@ -1249,7 +1259,7 @@ func TestReadFile(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		content, err := client.ReadFile(context.Background(), "/path/to/file.txt")
 
 		if err != nil {
@@ -1271,7 +1281,7 @@ func TestOpenRaw(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		result, err := client.OpenRaw(context.Background(), OpenConfig{
 			ID:    "profile-123",
 			Queue: true,
@@ -1293,7 +1303,7 @@ func TestAPIErrorScenarios(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		_, err := client.GetProfileDetail(context.Background(), "nonexistent")
 
 		if err == nil {
@@ -1310,7 +1320,7 @@ func TestAPIErrorScenarios(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		err := client.Health(context.Background())
 
 		if err == nil {
@@ -1339,7 +1349,7 @@ func TestWaitForReady(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		result, err := client.WaitForReady(context.Background(), "profile-123", 10)
 
 		if err != nil {
@@ -1358,7 +1368,7 @@ func TestAPIFailureScenarios(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		_, err := client.GetProfileDetail(context.Background(), "nonexistent")
 		if err == nil {
 			t.Error("expected error")
@@ -1371,7 +1381,7 @@ func TestAPIFailureScenarios(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		_, err := client.GetPIDs(context.Background(), []string{"profile-1"})
 		if err == nil {
 			t.Error("expected error")
@@ -1384,7 +1394,7 @@ func TestAPIFailureScenarios(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		_, err := client.GetAllPIDs(context.Background())
 		if err == nil {
 			t.Error("expected error")
@@ -1397,7 +1407,7 @@ func TestAPIFailureScenarios(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		_, err := client.GetAlivePIDs(context.Background(), []string{"profile-1"})
 		if err == nil {
 			t.Error("expected error")
@@ -1410,7 +1420,7 @@ func TestAPIFailureScenarios(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		_, err := client.GetPorts(context.Background())
 		if err == nil {
 			t.Error("expected error")
@@ -1423,7 +1433,7 @@ func TestAPIFailureScenarios(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		_, err := client.RandomizeFingerprint(context.Background(), "profile-1")
 		if err == nil {
 			t.Error("expected error")
@@ -1436,7 +1446,7 @@ func TestAPIFailureScenarios(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		_, err := client.GetCookies(context.Background(), "profile-1")
 		if err == nil {
 			t.Error("expected error")
@@ -1449,7 +1459,7 @@ func TestAPIFailureScenarios(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		_, err := client.FormatCookies(context.Background(), "invalid", "example.com")
 		if err == nil {
 			t.Error("expected error")
@@ -1462,7 +1472,7 @@ func TestAPIFailureScenarios(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		_, err := client.ReadExcel(context.Background(), "/nonexistent.xlsx")
 		if err == nil {
 			t.Error("expected error")
@@ -1475,7 +1485,7 @@ func TestAPIFailureScenarios(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		_, err := client.ReadFile(context.Background(), "/nonexistent.txt")
 		if err == nil {
 			t.Error("expected error")
@@ -1488,7 +1498,7 @@ func TestAPIFailureScenarios(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		_, err := client.ListProfiles(context.Background(), ListRequest{Page: 0, PageSize: 10})
 		if err == nil {
 			t.Error("expected error")
@@ -1501,7 +1511,7 @@ func TestAPIFailureScenarios(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		_, err := client.CheckProxy(context.Background(), ProxyCheckRequest{Host: "bad", Port: 1234})
 		if err == nil {
 			t.Error("expected error")
@@ -1514,7 +1524,7 @@ func TestAPIFailureScenarios(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		_, err := client.GetAllDisplays(context.Background())
 		if err == nil {
 			t.Error("expected error")
@@ -1527,7 +1537,7 @@ func TestAPIFailureScenarios(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		_, err := client.Open(context.Background(), "nonexistent", nil)
 		if err == nil {
 			t.Error("expected error")
@@ -1540,7 +1550,7 @@ func TestAPIFailureScenarios(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL)
+		client := mustNew(t,server.URL)
 		_, err := client.OpenRaw(context.Background(), OpenConfig{ID: "nonexistent"})
 		if err == nil {
 			t.Error("expected error")
@@ -1557,7 +1567,7 @@ func TestAPIKeyAuthentication(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL, WithAPIKey("my-secret-token-123"))
+		client := mustNew(t,server.URL, WithAPIKey("my-secret-token-123"))
 		_ = client.Health(context.Background())
 
 		if receivedAPIKey != "my-secret-token-123" {
@@ -1573,7 +1583,7 @@ func TestAPIKeyAuthentication(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL) // No API key
+		client := mustNew(t,server.URL) // No API key
 		_ = client.Health(context.Background())
 
 		if hasAPIKeyHeader {
@@ -1593,7 +1603,7 @@ func TestAPIKeyAuthentication(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := New(server.URL, WithAPIKey("invalid-key"))
+		client := mustNew(t,server.URL, WithAPIKey("invalid-key"))
 		err := client.Health(context.Background())
 
 		if err == nil {

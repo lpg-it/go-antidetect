@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -24,12 +25,38 @@ const (
 )
 
 // Client is the BitBrowser API client.
+//
+// The client supports two working modes for port management:
+//
+// # Managed Mode (for remote/distributed control)
+//
+// Configure with WithPortRange to enable SDK-managed port allocation:
+//
+//	client := bitbrowser.New(apiURL,
+//	    bitbrowser.WithPortRange(50000, 51000),
+//	)
+//
+// In this mode:
+//   - SDK randomly selects ports from the range
+//   - Forces binding to 0.0.0.0 for remote access
+//   - Automatically retries on port conflicts
+//
+// # Native Mode (default, for local development)
+//
+// Without port range configuration, BitBrowser assigns ports automatically:
+//
+//	client := bitbrowser.New(apiURL) // Native Mode
+//
+// WARNING: For remote browser control across machines, you MUST use Managed Mode.
+// Otherwise, the WebSocket URL (127.0.0.1) will be unreachable from remote hosts.
 type Client struct {
 	apiURL      string
 	httpClient  *http.Client
 	apiKey      string // API token for authentication (x-api-key header)
 	logger      *slog.Logger
 	retryConfig *RetryConfig
+	portConfig  *PortConfig  // Port management configuration
+	portManager *PortManager // Port manager (nil in Native Mode)
 }
 
 // ClientOption is a function that configures a Client.
@@ -68,21 +95,58 @@ func WithAPIKey(apiKey string) ClientOption {
 //
 // To customize the HTTP client (e.g., for custom transport or timeouts):
 //
-//	client := bitbrowser.New(apiURL, bitbrowser.WithHTTPClient(&http.Client{
+//	client, err := bitbrowser.New(apiURL, bitbrowser.WithHTTPClient(&http.Client{
 //	    Timeout: 2 * time.Minute,
 //	}))
-func New(apiURL string, opts ...ClientOption) *Client {
+//
+// For remote/distributed browser control, configure port management:
+//
+//	client, err := bitbrowser.New(apiURL,
+//	    bitbrowser.WithPortRange(50000, 51000), // Enable Managed Mode
+//	    bitbrowser.WithAPIKey("your-api-key"),
+//	)
+//
+// Returns an error if Managed Mode is enabled but the API URL is invalid.
+func New(apiURL string, opts ...ClientOption) (*Client, error) {
 	c := &Client{
 		apiURL:      strings.TrimRight(apiURL, "/"),
 		httpClient:  &http.Client{}, // No timeout - controlled by context
 		retryConfig: DefaultRetryConfig(),
+		portConfig:  DefaultPortConfig(),
 	}
 
 	for _, opt := range opts {
 		opt(c)
 	}
 
-	return c
+	// Initialize port manager if Managed Mode is enabled
+	if c.portConfig.IsManaged() {
+		// Extract host from API URL for remote port probing
+		host, err := extractHost(c.apiURL)
+		if err != nil {
+			return nil, fmt.Errorf("bitbrowser: invalid API URL for Managed Mode: %w", err)
+		}
+
+		pm, err := NewPortManager(c.portConfig, host)
+		if err != nil {
+			return nil, err
+		}
+		c.portManager = pm
+
+		if c.logger != nil {
+			c.logger.Info("bitbrowser: Managed Mode enabled",
+				slog.Int("min_port", c.portConfig.MinPort),
+				slog.Int("max_port", c.portConfig.MaxPort),
+				slog.String("probe_host", host),
+			)
+		}
+	} else {
+		if c.logger != nil {
+			c.logger.Debug("bitbrowser: Native Mode (no port management)")
+		}
+	}
+
+	return c, nil
 }
 
 // ============================================================================
@@ -261,11 +325,25 @@ func (c *Client) ResetClosingState(ctx context.Context, id string) error {
 // Open opens a browser instance with the specified options.
 // This is the recommended method for opening browsers with convenient options.
 //
+// # Port Management Modes
+//
+// The behavior depends on whether Managed Mode is enabled:
+//
+// Managed Mode (WithPortRange configured):
+//   - SDK allocates a port from the configured range
+//   - Automatically binds to 0.0.0.0 for remote access
+//   - Retries with different ports on conflict
+//   - opts.CustomPort and opts.AllowLAN are ignored
+//
+// Native Mode (default, no port range):
+//   - BitBrowser assigns ports automatically
+//   - opts.CustomPort and opts.AllowLAN are respected
+//   - WARNING: May return 127.0.0.1 which is unreachable remotely
+//
 // Example:
 //
 //	result, err := client.Open(ctx, "profile-id", &bitbrowser.OpenOptions{
 //	    Headless:          false,
-//	    AllowLAN:          true,
 //	    IgnoreDefaultUrls: true,
 //	    WaitReady:         true,
 //	})
@@ -274,48 +352,98 @@ func (c *Client) Open(ctx context.Context, id string, opts *OpenOptions) (*OpenR
 		opts = &OpenOptions{}
 	}
 
+	// Check if Managed Mode is active
+	if c.portManager != nil && c.portManager.IsActive() {
+		return c.openWithManagedPort(ctx, id, opts)
+	}
+
+	// Native Mode: let BitBrowser handle port allocation
+	return c.openNative(ctx, id, opts)
+}
+
+// openWithManagedPort opens a browser with SDK-managed port allocation.
+// It uses random probe + retry mechanism to handle port conflicts.
+func (c *Client) openWithManagedPort(ctx context.Context, id string, opts *OpenOptions) (*OpenResult, error) {
+	maxRetries := c.portConfig.MaxRetries
+	if maxRetries <= 0 {
+		maxRetries = 10
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// Pick an available port
+		port, err := c.portManager.PickPort()
+		if err != nil {
+			return nil, fmt.Errorf("bitbrowser: failed to allocate port: %w", err)
+		}
+
+		if c.logger != nil {
+			c.logger.Debug("bitbrowser: attempting to open browser with managed port",
+				slog.Int("port", port),
+				slog.Int("attempt", attempt),
+				slog.Int("max_retries", maxRetries),
+			)
+		}
+
+		// Build Chrome arguments with managed port
+		args := c.buildManagedArgs(port, opts)
+
+		// Build request
+		config := OpenConfig{
+			ID:                id,
+			Args:              args,
+			Queue:             true,
+			IgnoreDefaultUrls: opts.IgnoreDefaultUrls || opts.Headless,
+			NewPageUrl:        opts.StartURL,
+		}
+
+		result, err := c.doOpenRequest(ctx, config)
+		if err == nil {
+			// Success - fix up the HTTP endpoint for remote access
+			if result.Http != "" {
+				result.Http = fmt.Sprintf("http://0.0.0.0:%d", port)
+			}
+			return result, nil
+		}
+
+		lastErr = err
+
+		// Check if it's a port conflict error (browser already using this port)
+		if c.isPortConflictError(err) {
+			if c.logger != nil {
+				c.logger.Warn("bitbrowser: port conflict, retrying with different port",
+					slog.Int("port", port),
+					slog.Int("attempt", attempt),
+					slog.String("error", err.Error()),
+				)
+			}
+			continue
+		}
+
+		// Non-retryable error
+		return nil, err
+	}
+
+	return nil, fmt.Errorf("bitbrowser: failed to open browser after %d attempts: %w", maxRetries, lastErr)
+}
+
+// openNative opens a browser using Native Mode (BitBrowser-managed ports).
+func (c *Client) openNative(ctx context.Context, id string, opts *OpenOptions) (*OpenResult, error) {
+	// Log warning if remote access might be needed
+	if c.logger != nil && !opts.AllowLAN && opts.CustomPort == 0 {
+		c.logger.Debug("bitbrowser: Native Mode - browser may bind to 127.0.0.1. " +
+			"For remote access, use WithPortRange() to enable Managed Mode.")
+	}
+
 	// Build Chrome arguments from options
-	var args []string
-
-	// Custom port
-	if opts.CustomPort > 0 {
-		args = append(args, fmt.Sprintf("--remote-debugging-port=%d", opts.CustomPort))
-	}
-
-	// Allow LAN access
-	if opts.AllowLAN {
-		args = append(args, "--remote-debugging-address=0.0.0.0")
-	}
-
-	// Headless mode
-	if opts.Headless {
-		args = append(args, "--headless")
-	}
-
-	// Incognito mode
-	if opts.Incognito {
-		args = append(args, "--incognito")
-	}
-
-	// Disable GPU
-	if opts.DisableGPU {
-		args = append(args, "--disable-gpu")
-	}
-
-	// Load extensions
-	if opts.LoadExtensions != "" {
-		args = append(args, fmt.Sprintf("--load-extension=%s", opts.LoadExtensions))
-	}
-
-	// Extra args
-	args = append(args, opts.ExtraArgs...)
+	args := c.buildNativeArgs(opts)
 
 	// Build request
 	config := OpenConfig{
 		ID:                id,
 		Args:              args,
-		Queue:             true, // Always use queue mode for stability
-		IgnoreDefaultUrls: opts.IgnoreDefaultUrls || opts.Headless, // Headless requires this
+		Queue:             true,
+		IgnoreDefaultUrls: opts.IgnoreDefaultUrls || opts.Headless,
 		NewPageUrl:        opts.StartURL,
 	}
 
@@ -347,6 +475,114 @@ func (c *Client) Open(ctx context.Context, id string, opts *OpenOptions) (*OpenR
 	}
 
 	return &result, nil
+}
+
+// buildManagedArgs builds Chrome arguments for Managed Mode.
+// It always includes port binding to 0.0.0.0 for remote access.
+func (c *Client) buildManagedArgs(port int, opts *OpenOptions) []string {
+	var args []string
+
+	// Managed port and address (always 0.0.0.0 for remote access)
+	args = append(args, fmt.Sprintf("--remote-debugging-port=%d", port))
+	args = append(args, "--remote-debugging-address=0.0.0.0")
+
+	// Headless mode
+	if opts.Headless {
+		args = append(args, "--headless")
+	}
+
+	// Incognito mode
+	if opts.Incognito {
+		args = append(args, "--incognito")
+	}
+
+	// Disable GPU
+	if opts.DisableGPU {
+		args = append(args, "--disable-gpu")
+	}
+
+	// Load extensions
+	if opts.LoadExtensions != "" {
+		args = append(args, fmt.Sprintf("--load-extension=%s", opts.LoadExtensions))
+	}
+
+	// Extra args
+	args = append(args, opts.ExtraArgs...)
+
+	return args
+}
+
+// buildNativeArgs builds Chrome arguments for Native Mode.
+// It respects user-specified CustomPort and AllowLAN options.
+func (c *Client) buildNativeArgs(opts *OpenOptions) []string {
+	var args []string
+
+	// Custom port (user-specified)
+	if opts.CustomPort > 0 {
+		args = append(args, fmt.Sprintf("--remote-debugging-port=%d", opts.CustomPort))
+	}
+
+	// Allow LAN access (user-specified)
+	if opts.AllowLAN {
+		args = append(args, "--remote-debugging-address=0.0.0.0")
+	}
+
+	// Headless mode
+	if opts.Headless {
+		args = append(args, "--headless")
+	}
+
+	// Incognito mode
+	if opts.Incognito {
+		args = append(args, "--incognito")
+	}
+
+	// Disable GPU
+	if opts.DisableGPU {
+		args = append(args, "--disable-gpu")
+	}
+
+	// Load extensions
+	if opts.LoadExtensions != "" {
+		args = append(args, fmt.Sprintf("--load-extension=%s", opts.LoadExtensions))
+	}
+
+	// Extra args
+	args = append(args, opts.ExtraArgs...)
+
+	return args
+}
+
+// doOpenRequest performs the /browser/open API call and parses the response.
+func (c *Client) doOpenRequest(ctx context.Context, config OpenConfig) (*OpenResult, error) {
+	var resp Response
+	if err := c.doRequest(ctx, "/browser/open", config, &resp); err != nil {
+		return nil, err
+	}
+	if !resp.Success {
+		return nil, fmt.Errorf("%s", resp.Msg)
+	}
+
+	var result OpenResult
+	if err := json.Unmarshal(resp.Data, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &result, nil
+}
+
+// isPortConflictError checks if an error indicates a port conflict.
+func (c *Client) isPortConflictError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errMsg := strings.ToLower(err.Error())
+	// Common port conflict indicators
+	return strings.Contains(errMsg, "port") ||
+		strings.Contains(errMsg, "address already in use") ||
+		strings.Contains(errMsg, "端口") ||
+		strings.Contains(errMsg, "already") ||
+		strings.Contains(errMsg, "occupied")
 }
 
 // OpenRaw opens a browser using the raw API configuration.
@@ -1101,5 +1337,19 @@ func (c *Client) executeRequest(ctx context.Context, path string, jsonData []byt
 	}
 
 	return nil
+}
+
+// extractHost extracts the hostname from a URL string.
+// Returns an error if the URL is invalid or has no host.
+func extractHost(rawURL string) (string, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse URL %q: %w", rawURL, err)
+	}
+	host := u.Hostname()
+	if host == "" {
+		return "", fmt.Errorf("URL %q has no host", rawURL)
+	}
+	return host, nil
 }
 
