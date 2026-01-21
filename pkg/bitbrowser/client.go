@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -118,12 +119,23 @@ func New(apiURL string, opts ...ClientOption) (*Client, error) {
 
 	// Initialize port manager if Managed Mode is enabled
 	if c.portConfig.IsManaged() {
-		c.portManager = NewPortManager(c.portConfig)
+		// Extract host from API URL for remote port probing
+		host, err := extractHost(c.apiURL)
+		if err != nil {
+			return nil, fmt.Errorf("bitbrowser: invalid API URL for Managed Mode: %w", err)
+		}
+
+		pm, err := NewPortManager(c.portConfig, host)
+		if err != nil {
+			return nil, err
+		}
+		c.portManager = pm
 
 		if c.logger != nil {
 			c.logger.Info("bitbrowser: Managed Mode enabled",
 				slog.Int("min_port", c.portConfig.MinPort),
 				slog.Int("max_port", c.portConfig.MaxPort),
+				slog.String("probe_host", host),
 			)
 		}
 	} else {
@@ -1323,5 +1335,19 @@ func (c *Client) executeRequest(ctx context.Context, path string, jsonData []byt
 	}
 
 	return nil
+}
+
+// extractHost extracts the hostname from a URL string.
+// Returns an error if the URL is invalid or has no host.
+func extractHost(rawURL string) (string, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse URL %q: %w", rawURL, err)
+	}
+	host := u.Hostname()
+	if host == "" {
+		return "", fmt.Errorf("URL %q has no host", rawURL)
+	}
+	return host, nil
 }
 
