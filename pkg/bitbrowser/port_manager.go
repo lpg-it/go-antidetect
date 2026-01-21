@@ -40,16 +40,24 @@ func NewPortManager(config *PortConfig, host string) (*PortManager, error) {
 }
 
 // PickPort selects an available port from the configured range.
-// It uses random shuffling to distribute load evenly and avoid
-// collisions when multiple services are running concurrently.
+// Deprecated: Use PickPortExcluding instead for better reliability.
+func (pm *PortManager) PickPort() (int, error) {
+	return pm.PickPortExcluding(nil)
+}
+
+// PickPortExcluding selects a random port from the configured range,
+// excluding the ports in the provided set.
 //
 // The method:
 //  1. Creates a shuffled list of all ports in the range
-//  2. Probes each port with TCP to check if it's in use
-//  3. Returns the first port that passes the probe
+//  2. Filters out ports that are in the excluded set
+//  3. Returns the first remaining port
+//
+// The excluded set should contain ports already used by BitBrowser
+// (obtained via GetPorts API).
 //
 // Returns an error if no available port is found.
-func (pm *PortManager) PickPort() (int, error) {
+func (pm *PortManager) PickPortExcluding(excluded map[int]bool) (int, error) {
 	if pm == nil || pm.config == nil || !pm.config.IsManaged() {
 		return 0, fmt.Errorf("port manager not configured")
 	}
@@ -59,35 +67,16 @@ func (pm *PortManager) PickPort() (int, error) {
 		return 0, fmt.Errorf("no ports in range [%d, %d]", pm.config.MinPort, pm.config.MaxPort)
 	}
 
-	// Track statistics for error reporting
-	var (
-		inUseCount    int
-		availablePort int
-		foundAvailable bool
-		sampleInUse   []int // Sample of ports that are in use
-	)
-
+	// Find first port not in excluded set
 	for _, port := range ports {
-		available := pm.isPortAvailable(port)
-		if available {
-			availablePort = port
-			foundAvailable = true
-			break
+		if excluded != nil && excluded[port] {
+			continue
 		}
-		inUseCount++
-		if len(sampleInUse) < 5 {
-			sampleInUse = append(sampleInUse, port)
-		}
+		return port, nil
 	}
 
-	if foundAvailable {
-		return availablePort, nil
-	}
-
-	return 0, fmt.Errorf("no available port in range [%d, %d] on host %s: all %d ports appear to be in use (sample: %v). "+
-		"This may indicate: 1) Many browsers are running, 2) A firewall/proxy is accepting all connections, "+
-		"3) Network issue. Try increasing the port range or check server configuration",
-		pm.config.MinPort, pm.config.MaxPort, pm.host, len(ports), sampleInUse)
+	return 0, fmt.Errorf("no available port in range [%d, %d]: all %d ports are excluded (BitBrowser is using them)",
+		pm.config.MinPort, pm.config.MaxPort, len(excluded))
 }
 
 // generateShuffledPorts creates a randomly shuffled slice of all ports in the range.

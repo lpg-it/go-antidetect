@@ -360,7 +360,11 @@ func (c *Client) Open(ctx context.Context, id string, opts *OpenOptions) (*OpenR
 }
 
 // openWithManagedPort opens a browser with SDK-managed port allocation.
-// It uses random probe + retry mechanism to handle port conflicts.
+// It uses the following strategy:
+//  1. Get all ports currently used by BitBrowser via API
+//  2. Exclude those ports from the configured range
+//  3. Randomly pick a port from the remaining available ports
+//  4. If another program is using the port, BitBrowser will fail and SDK retries
 func (c *Client) openWithManagedPort(ctx context.Context, id string, opts *OpenOptions) (*OpenResult, error) {
 	maxRetries := c.portConfig.MaxRetries
 	if maxRetries <= 0 {
@@ -369,8 +373,20 @@ func (c *Client) openWithManagedPort(ctx context.Context, id string, opts *OpenO
 
 	var lastErr error
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		// Pick an available port
-		port, err := c.portManager.PickPort()
+		// Get ports currently used by BitBrowser
+		usedPorts, err := c.getUsedPortsSet(ctx)
+		if err != nil {
+			if c.logger != nil {
+				c.logger.Warn("bitbrowser: failed to get used ports, proceeding with random selection",
+					slog.String("error", err.Error()),
+				)
+			}
+			// Continue with empty set - we'll rely on retry if there's a conflict
+			usedPorts = make(map[int]bool)
+		}
+
+		// Pick an available port (excluding used ones)
+		port, err := c.portManager.PickPortExcluding(usedPorts)
 		if err != nil {
 			return nil, fmt.Errorf("bitbrowser: failed to allocate port: %w", err)
 		}
@@ -380,6 +396,7 @@ func (c *Client) openWithManagedPort(ctx context.Context, id string, opts *OpenO
 				slog.Int("port", port),
 				slog.Int("attempt", attempt),
 				slog.Int("max_retries", maxRetries),
+				slog.Int("excluded_ports", len(usedPorts)),
 			)
 		}
 
@@ -406,7 +423,7 @@ func (c *Client) openWithManagedPort(ctx context.Context, id string, opts *OpenO
 
 		lastErr = err
 
-		// Check if it's a port conflict error (browser already using this port)
+		// Check if it's a port conflict error (another program using this port)
 		if c.isPortConflictError(err) {
 			if c.logger != nil {
 				c.logger.Warn("bitbrowser: port conflict, retrying with different port",
@@ -423,6 +440,26 @@ func (c *Client) openWithManagedPort(ctx context.Context, id string, opts *OpenO
 	}
 
 	return nil, fmt.Errorf("bitbrowser: failed to open browser after %d attempts: %w", maxRetries, lastErr)
+}
+
+// getUsedPortsSet returns a set of ports currently used by BitBrowser.
+func (c *Client) getUsedPortsSet(ctx context.Context) (map[int]bool, error) {
+	ports, err := c.GetPorts(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	usedPorts := make(map[int]bool)
+	for _, portStr := range ports {
+		if portStr == "" {
+			continue
+		}
+		var port int
+		if _, err := fmt.Sscanf(portStr, "%d", &port); err == nil && port > 0 {
+			usedPorts[port] = true
+		}
+	}
+	return usedPorts, nil
 }
 
 // openNative opens a browser using Native Mode (BitBrowser-managed ports).

@@ -40,3 +40,4 @@ dist/
 # Debug files
 debug
 *.log
+test_remote.go
