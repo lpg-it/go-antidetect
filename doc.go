@@ -20,11 +20,17 @@
 //
 //	import (
 //	    "context"
+//	    "log"
+//
 //	    antidetect "github.com/lpg-it/go-antidetect"
 //	)
 //
 //	func main() {
-//	    client := antidetect.NewBitBrowser("http://127.0.0.1:54345")
+//	    client, err := antidetect.NewBitBrowser("http://127.0.0.1:54345")
+//	    if err != nil {
+//	        log.Fatal(err)
+//	    }
+//
 //	    ctx := context.Background()
 //
 //	    // Create a profile
@@ -32,8 +38,11 @@
 //	        Name: "my-profile",
 //	    })
 //
-//	    // Open browser with custom port
-//	    result, _ := client.OpenWithPort(ctx, id, 9222, false)
+//	    // Open browser with options
+//	    result, _ := client.Open(ctx, id, &antidetect.OpenOptions{
+//	        AllowLAN:          true,
+//	        IgnoreDefaultUrls: true,
+//	    })
 //
 //	    // Use result.Ws with chromedp, playwright-go, or rod
 //	    // ...
@@ -49,6 +58,9 @@
 //
 // Browser Control: Open and close browsers with custom debugging ports,
 // headless mode, and various Chrome arguments.
+//
+// Managed Mode: For remote/distributed control, use WithPortRange to enable
+// SDK-managed port allocation with automatic retry on conflicts.
 //
 // Proxy Management: Configure HTTP/HTTPS/SOCKS5/SSH proxies with support for
 // dynamic IP extraction and proxy health checking.

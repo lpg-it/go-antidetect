@@ -9,7 +9,10 @@
 //	import antidetect "github.com/lpg-it/go-antidetect"
 //
 //	// Create a BitBrowser client
-//	client := antidetect.NewBitBrowser("http://127.0.0.1:54345")
+//	client, err := antidetect.NewBitBrowser("http://127.0.0.1:54345")
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
 //
 //	// Check connection
 //	if err := client.Health(ctx); err != nil {
@@ -66,7 +69,7 @@ var WithHTTPClient = bitbrowser.WithHTTPClient
 //
 // Example:
 //
-//	client := antidetect.NewBitBrowser(apiURL, antidetect.WithAPIKey("56d2b7c905"))
+//	client, err := antidetect.NewBitBrowser(apiURL, antidetect.WithAPIKey("56d2b7c905"))
 var WithAPIKey = bitbrowser.WithAPIKey
 
 // WithLogger sets the logger for the client.
@@ -90,7 +93,7 @@ var WithRetryConfig = bitbrowser.WithRetryConfig
 //
 // Recommended for remote/distributed browser control:
 //
-//	client := antidetect.NewBitBrowser(apiURL, antidetect.WithPortRange(50000, 51000))
+//	client, err := antidetect.NewBitBrowser(apiURL, antidetect.WithPortRange(50000, 51000))
 //
 // If minPort or maxPort is 0, Managed Mode is disabled (Native Mode).
 //

@@ -32,7 +32,7 @@ const (
 //
 // Configure with WithPortRange to enable SDK-managed port allocation:
 //
-//	client := bitbrowser.New(apiURL,
+//	client, err := bitbrowser.New(apiURL,
 //	    bitbrowser.WithPortRange(50000, 51000),
 //	)
 //
@@ -45,7 +45,7 @@ const (
 //
 // Without port range configuration, BitBrowser assigns ports automatically:
 //
-//	client := bitbrowser.New(apiURL) // Native Mode
+//	client, err := bitbrowser.New(apiURL) // Native Mode
 //
 // WARNING: For remote browser control across machines, you MUST use Managed Mode.
 // Otherwise, the WebSocket URL (127.0.0.1) will be unreachable from remote hosts.
@@ -76,7 +76,7 @@ func WithHTTPClient(httpClient *http.Client) ClientOption {
 //
 // Example:
 //
-//	client := bitbrowser.New(apiURL, bitbrowser.WithAPIKey("56d2b7c905"))
+//	client, err := bitbrowser.New(apiURL, bitbrowser.WithAPIKey("56d2b7c905"))
 func WithAPIKey(apiKey string) ClientOption {
 	return func(c *Client) {
 		c.apiKey = apiKey

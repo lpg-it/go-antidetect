@@ -14,7 +14,7 @@ package bitbrowser
 //
 // Example:
 //
-//	client := bitbrowser.New(apiURL,
+//	client, err := bitbrowser.New(apiURL,
 //	    bitbrowser.WithPortRange(50000, 51000),
 //	)
 //
@@ -73,7 +73,7 @@ func (c *PortConfig) PortRangeSize() int {
 //
 // Recommended for remote/distributed browser control:
 //
-//	client := bitbrowser.New(apiURL, bitbrowser.WithPortRange(50000, 51000))
+//	client, err := bitbrowser.New(apiURL, bitbrowser.WithPortRange(50000, 51000))
 //
 // If minPort or maxPort is 0, Managed Mode is disabled.
 func WithPortRange(minPort, maxPort int) ClientOption {

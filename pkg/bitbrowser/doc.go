@@ -10,14 +10,22 @@
 // antidetect package for a simpler import:
 //
 //	import antidetect "github.com/lpg-it/go-antidetect"
-//	client := antidetect.NewBitBrowser("http://127.0.0.1:54345")
+//
+//	client, err := antidetect.NewBitBrowser("http://127.0.0.1:54345")
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
 //
 // # Direct Usage
 //
 // If you prefer to use the bitbrowser package directly:
 //
 //	import "github.com/lpg-it/go-antidetect/pkg/bitbrowser"
-//	client := bitbrowser.New("http://127.0.0.1:54345")
+//
+//	client, err := bitbrowser.New("http://127.0.0.1:54345")
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
 //
 // # API Coverage
 //
