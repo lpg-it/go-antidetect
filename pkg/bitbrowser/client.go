@@ -1,0 +1,811 @@
+package bitbrowser
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+)
+
+// Default values for BitBrowser configuration.
+const (
+	// DefaultCoreVersion is the default Chrome kernel version.
+	DefaultCoreVersion = "130"
+	// ProxyMethodCustom indicates using a custom proxy.
+	ProxyMethodCustom = 2
+	// ProxyMethodExtract indicates using extracted IP.
+	ProxyMethodExtract = 3
+)
+
+// Client is the BitBrowser API client.
+type Client struct {
+	apiURL     string
+	httpClient *http.Client
+}
+
+// New creates a new BitBrowser client.
+// apiURL should be the BitBrowser API endpoint, e.g., "http://127.0.0.1:54345".
+func New(apiURL string) *Client {
+	return &Client{
+		apiURL: strings.TrimRight(apiURL, "/"),
+		httpClient: &http.Client{
+			Timeout: 60 * time.Second,
+		},
+	}
+}
+
+// ============================================================================
+// Health Check
+// ============================================================================
+
+// Health checks if the BitBrowser local server is running.
+// POST /health
+func (c *Client) Health(ctx context.Context) error {
+	var resp Response
+	if err := c.doRequest(ctx, "/health", struct{}{}, &resp); err != nil {
+		return fmt.Errorf("bitbrowser: health check failed: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("bitbrowser: health check returned false")
+	}
+	return nil
+}
+
+// ============================================================================
+// Profile Management
+// ============================================================================
+
+// CreateProfile creates a new browser profile.
+// POST /browser/update
+func (c *Client) CreateProfile(ctx context.Context, config ProfileConfig) (string, error) {
+	// Ensure fingerprint is set (required by API)
+	if config.BrowserFingerPrint == nil {
+		config.BrowserFingerPrint = &Fingerprint{
+			CoreVersion: DefaultCoreVersion,
+		}
+	}
+
+	var resp Response
+	if err := c.doRequest(ctx, "/browser/update", config, &resp); err != nil {
+		return "", fmt.Errorf("bitbrowser: create profile failed: %w", err)
+	}
+	if !resp.Success {
+		return "", fmt.Errorf("bitbrowser: create profile failed: %s", resp.Msg)
+	}
+
+	var data struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		return "", fmt.Errorf("bitbrowser: failed to parse response: %w", err)
+	}
+	return data.ID, nil
+}
+
+// UpdateProfile updates an existing browser profile.
+// POST /browser/update
+func (c *Client) UpdateProfile(ctx context.Context, config ProfileConfig) error {
+	if config.ID == "" {
+		return fmt.Errorf("bitbrowser: profile ID is required for update")
+	}
+
+	var resp Response
+	if err := c.doRequest(ctx, "/browser/update", config, &resp); err != nil {
+		return fmt.Errorf("bitbrowser: update profile failed: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("bitbrowser: update profile failed: %s", resp.Msg)
+	}
+	return nil
+}
+
+// UpdateProfilePartial updates specific fields of one or more profiles.
+// POST /browser/update/partial
+func (c *Client) UpdateProfilePartial(ctx context.Context, req PartialUpdateRequest) error {
+	var resp Response
+	if err := c.doRequest(ctx, "/browser/update/partial", req, &resp); err != nil {
+		return fmt.Errorf("bitbrowser: partial update failed: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("bitbrowser: partial update failed: %s", resp.Msg)
+	}
+	return nil
+}
+
+// GetProfileDetail gets detailed information about a browser profile.
+// POST /browser/detail
+func (c *Client) GetProfileDetail(ctx context.Context, id string) (*ProfileDetail, error) {
+	req := struct {
+		ID string `json:"id"`
+	}{ID: id}
+
+	var resp Response
+	if err := c.doRequest(ctx, "/browser/detail", req, &resp); err != nil {
+		return nil, fmt.Errorf("bitbrowser: get profile detail failed: %w", err)
+	}
+	if !resp.Success {
+		return nil, fmt.Errorf("bitbrowser: get profile detail failed: %s", resp.Msg)
+	}
+
+	var detail ProfileDetail
+	if err := json.Unmarshal(resp.Data, &detail); err != nil {
+		return nil, fmt.Errorf("bitbrowser: failed to parse response: %w", err)
+	}
+	return &detail, nil
+}
+
+// ListProfiles gets a paginated list of browser profiles.
+// POST /browser/list
+func (c *Client) ListProfiles(ctx context.Context, req ListRequest) (*ListResult, error) {
+	var resp Response
+	if err := c.doRequest(ctx, "/browser/list", req, &resp); err != nil {
+		return nil, fmt.Errorf("bitbrowser: list profiles failed: %w", err)
+	}
+	if !resp.Success {
+		return nil, fmt.Errorf("bitbrowser: list profiles failed: %s", resp.Msg)
+	}
+
+	var result ListResult
+	if err := json.Unmarshal(resp.Data, &result); err != nil {
+		return nil, fmt.Errorf("bitbrowser: failed to parse response: %w", err)
+	}
+	return &result, nil
+}
+
+// DeleteProfile deletes a single browser profile permanently.
+// POST /browser/delete
+func (c *Client) DeleteProfile(ctx context.Context, id string) error {
+	req := struct {
+		ID string `json:"id"`
+	}{ID: id}
+
+	var resp Response
+	if err := c.doRequest(ctx, "/browser/delete", req, &resp); err != nil {
+		return fmt.Errorf("bitbrowser: delete profile failed: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("bitbrowser: delete profile failed: %s", resp.Msg)
+	}
+	return nil
+}
+
+// DeleteProfiles deletes multiple browser profiles permanently (max 100).
+// POST /browser/delete/ids
+func (c *Client) DeleteProfiles(ctx context.Context, ids []string) error {
+	req := struct {
+		IDs []string `json:"ids"`
+	}{IDs: ids}
+
+	var resp Response
+	if err := c.doRequest(ctx, "/browser/delete/ids", req, &resp); err != nil {
+		return fmt.Errorf("bitbrowser: batch delete failed: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("bitbrowser: batch delete failed: %s", resp.Msg)
+	}
+	return nil
+}
+
+// ResetClosingState resets a profile's closing state when it's stuck.
+// POST /browser/closing/reset
+func (c *Client) ResetClosingState(ctx context.Context, id string) error {
+	req := struct {
+		ID string `json:"id"`
+	}{ID: id}
+
+	var resp Response
+	if err := c.doRequest(ctx, "/browser/closing/reset", req, &resp); err != nil {
+		return fmt.Errorf("bitbrowser: reset closing state failed: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("bitbrowser: reset closing state failed: %s", resp.Msg)
+	}
+	return nil
+}
+
+// ============================================================================
+// Browser Control
+// ============================================================================
+
+// Open opens a browser instance for the specified profile.
+// POST /browser/open
+func (c *Client) Open(ctx context.Context, config OpenConfig) (*OpenResult, error) {
+	var resp Response
+	if err := c.doRequest(ctx, "/browser/open", config, &resp); err != nil {
+		return nil, fmt.Errorf("bitbrowser: open browser failed: %w", err)
+	}
+	if !resp.Success {
+		return nil, fmt.Errorf("bitbrowser: open browser failed: %s", resp.Msg)
+	}
+
+	var result OpenResult
+	if err := json.Unmarshal(resp.Data, &result); err != nil {
+		return nil, fmt.Errorf("bitbrowser: failed to parse response: %w", err)
+	}
+
+	// Ensure HTTP endpoint has protocol prefix
+	if result.Http != "" && !strings.HasPrefix(result.Http, "http://") {
+		result.Http = "http://" + result.Http
+	}
+
+	return &result, nil
+}
+
+// OpenWithPort opens a browser with a custom debugging port.
+// This is a convenience method that sets up the args for custom port.
+func (c *Client) OpenWithPort(ctx context.Context, id string, port int, headless bool) (*OpenResult, error) {
+	var args []string
+	if port > 0 {
+		args = append(args, fmt.Sprintf("--remote-debugging-port=%d", port))
+		args = append(args, "--remote-debugging-address=0.0.0.0")
+	}
+	if headless {
+		args = append(args, "--headless")
+	}
+
+	return c.Open(ctx, OpenConfig{
+		ID:    id,
+		Args:  args,
+		Queue: true,
+	})
+}
+
+// Close closes a running browser instance.
+// POST /browser/close
+// Note: Wait at least 5 seconds before reopening or deleting the profile.
+func (c *Client) Close(ctx context.Context, id string) error {
+	req := struct {
+		ID string `json:"id"`
+	}{ID: id}
+
+	var resp Response
+	if err := c.doRequest(ctx, "/browser/close", req, &resp); err != nil {
+		return fmt.Errorf("bitbrowser: close browser failed: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("bitbrowser: close browser failed: %s", resp.Msg)
+	}
+	return nil
+}
+
+// CloseBySeqs closes browsers by their sequence numbers.
+// POST /browser/close/byseqs
+func (c *Client) CloseBySeqs(ctx context.Context, seqs []int) error {
+	req := struct {
+		Seqs []int `json:"seqs"`
+	}{Seqs: seqs}
+
+	var resp Response
+	if err := c.doRequest(ctx, "/browser/close/byseqs", req, &resp); err != nil {
+		return fmt.Errorf("bitbrowser: close by seqs failed: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("bitbrowser: close by seqs failed: %s", resp.Msg)
+	}
+	return nil
+}
+
+// CloseAll closes all open browser windows.
+// POST /browser/close/all
+func (c *Client) CloseAll(ctx context.Context) error {
+	var resp Response
+	if err := c.doRequest(ctx, "/browser/close/all", struct{}{}, &resp); err != nil {
+		return fmt.Errorf("bitbrowser: close all failed: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("bitbrowser: close all failed: %s", resp.Msg)
+	}
+	return nil
+}
+
+// ============================================================================
+// Process Management
+// ============================================================================
+
+// GetPIDs gets the process IDs for the specified browser profiles.
+// POST /browser/pids
+func (c *Client) GetPIDs(ctx context.Context, ids []string) (map[string]int, error) {
+	req := struct {
+		IDs []string `json:"ids"`
+	}{IDs: ids}
+
+	var resp Response
+	if err := c.doRequest(ctx, "/browser/pids", req, &resp); err != nil {
+		return nil, fmt.Errorf("bitbrowser: get pids failed: %w", err)
+	}
+	if !resp.Success {
+		return nil, fmt.Errorf("bitbrowser: get pids failed: %s", resp.Msg)
+	}
+
+	var result map[string]int
+	if err := json.Unmarshal(resp.Data, &result); err != nil {
+		return nil, fmt.Errorf("bitbrowser: failed to parse response: %w", err)
+	}
+	return result, nil
+}
+
+// GetAllPIDs gets all running browser process IDs.
+// POST /browser/pids/all
+func (c *Client) GetAllPIDs(ctx context.Context) (map[string]int, error) {
+	var resp Response
+	if err := c.doRequest(ctx, "/browser/pids/all", struct{}{}, &resp); err != nil {
+		return nil, fmt.Errorf("bitbrowser: get all pids failed: %w", err)
+	}
+	if !resp.Success {
+		return nil, fmt.Errorf("bitbrowser: get all pids failed: %s", resp.Msg)
+	}
+
+	var result map[string]int
+	if err := json.Unmarshal(resp.Data, &result); err != nil {
+		return nil, fmt.Errorf("bitbrowser: failed to parse response: %w", err)
+	}
+	return result, nil
+}
+
+// GetAlivePIDs gets alive process IDs for the specified profiles.
+// POST /browser/pids/alive
+func (c *Client) GetAlivePIDs(ctx context.Context, ids []string) (map[string]int, error) {
+	req := struct {
+		IDs []string `json:"ids"`
+	}{IDs: ids}
+
+	var resp Response
+	if err := c.doRequest(ctx, "/browser/pids/alive", req, &resp); err != nil {
+		return nil, fmt.Errorf("bitbrowser: get alive pids failed: %w", err)
+	}
+	if !resp.Success {
+		return nil, fmt.Errorf("bitbrowser: get alive pids failed: %s", resp.Msg)
+	}
+
+	var result map[string]int
+	if err := json.Unmarshal(resp.Data, &result); err != nil {
+		return nil, fmt.Errorf("bitbrowser: failed to parse response: %w", err)
+	}
+	return result, nil
+}
+
+// GetPorts gets the debugging ports for all open browsers.
+// POST /browser/ports
+func (c *Client) GetPorts(ctx context.Context) (map[string]string, error) {
+	var resp Response
+	if err := c.doRequest(ctx, "/browser/ports", struct{}{}, &resp); err != nil {
+		return nil, fmt.Errorf("bitbrowser: get ports failed: %w", err)
+	}
+	if !resp.Success {
+		return nil, fmt.Errorf("bitbrowser: get ports failed: %s", resp.Msg)
+	}
+
+	var result map[string]string
+	if err := json.Unmarshal(resp.Data, &result); err != nil {
+		return nil, fmt.Errorf("bitbrowser: failed to parse response: %w", err)
+	}
+	return result, nil
+}
+
+// ============================================================================
+// Proxy Management
+// ============================================================================
+
+// UpdateProxy updates proxy settings for multiple profiles.
+// POST /browser/proxy/update
+func (c *Client) UpdateProxy(ctx context.Context, req ProxyUpdateRequest) error {
+	var resp Response
+	if err := c.doRequest(ctx, "/browser/proxy/update", req, &resp); err != nil {
+		return fmt.Errorf("bitbrowser: update proxy failed: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("bitbrowser: update proxy failed: %s", resp.Msg)
+	}
+	return nil
+}
+
+// CheckProxy checks if a proxy is working and gets its information.
+// POST /checkagent
+func (c *Client) CheckProxy(ctx context.Context, req ProxyCheckRequest) (*ProxyCheckResult, error) {
+	var resp Response
+	if err := c.doRequest(ctx, "/checkagent", req, &resp); err != nil {
+		return nil, fmt.Errorf("bitbrowser: check proxy failed: %w", err)
+	}
+	if !resp.Success {
+		return nil, fmt.Errorf("bitbrowser: check proxy failed: %s", resp.Msg)
+	}
+
+	var result ProxyCheckResult
+	if err := json.Unmarshal(resp.Data, &result); err != nil {
+		return nil, fmt.Errorf("bitbrowser: failed to parse response: %w", err)
+	}
+	return &result, nil
+}
+
+// ============================================================================
+// Group Management
+// ============================================================================
+
+// UpdateGroup moves profiles to a specified group.
+// POST /browser/group/update
+func (c *Client) UpdateGroup(ctx context.Context, groupID string, browserIDs []string) error {
+	req := struct {
+		GroupID    string   `json:"groupId"`
+		BrowserIDs []string `json:"browserIds"`
+	}{
+		GroupID:    groupID,
+		BrowserIDs: browserIDs,
+	}
+
+	var resp Response
+	if err := c.doRequest(ctx, "/browser/group/update", req, &resp); err != nil {
+		return fmt.Errorf("bitbrowser: update group failed: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("bitbrowser: update group failed: %s", resp.Msg)
+	}
+	return nil
+}
+
+// UpdateRemark updates the remark for multiple profiles.
+// POST /browser/remark/update
+func (c *Client) UpdateRemark(ctx context.Context, remark string, browserIDs []string) error {
+	req := struct {
+		Remark     string   `json:"remark"`
+		BrowserIDs []string `json:"browserIds"`
+	}{
+		Remark:     remark,
+		BrowserIDs: browserIDs,
+	}
+
+	var resp Response
+	if err := c.doRequest(ctx, "/browser/remark/update", req, &resp); err != nil {
+		return fmt.Errorf("bitbrowser: update remark failed: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("bitbrowser: update remark failed: %s", resp.Msg)
+	}
+	return nil
+}
+
+// ============================================================================
+// Window Arrangement
+// ============================================================================
+
+// ArrangeWindows arranges browser windows according to the specified layout.
+// POST /windowbounds
+func (c *Client) ArrangeWindows(ctx context.Context, req WindowBoundsRequest) error {
+	var resp Response
+	if err := c.doRequest(ctx, "/windowbounds", req, &resp); err != nil {
+		return fmt.Errorf("bitbrowser: arrange windows failed: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("bitbrowser: arrange windows failed: %s", resp.Msg)
+	}
+	return nil
+}
+
+// ArrangeWindowsFlexible auto-arranges windows flexibly.
+// POST /windowbounds/flexable
+func (c *Client) ArrangeWindowsFlexible(ctx context.Context, seqList []int) error {
+	req := struct {
+		SeqList []int `json:"seqlist"`
+	}{SeqList: seqList}
+
+	var resp Response
+	if err := c.doRequest(ctx, "/windowbounds/flexable", req, &resp); err != nil {
+		return fmt.Errorf("bitbrowser: flexible arrange failed: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("bitbrowser: flexible arrange failed: %s", resp.Msg)
+	}
+	return nil
+}
+
+// ============================================================================
+// Cache Management
+// ============================================================================
+
+// ClearCache clears all cache for the specified profiles.
+// POST /cache/clear
+func (c *Client) ClearCache(ctx context.Context, ids []string) error {
+	req := struct {
+		IDs []string `json:"ids"`
+	}{IDs: ids}
+
+	var resp Response
+	if err := c.doRequest(ctx, "/cache/clear", req, &resp); err != nil {
+		return fmt.Errorf("bitbrowser: clear cache failed: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("bitbrowser: clear cache failed: %s", resp.Msg)
+	}
+	return nil
+}
+
+// ClearCacheExceptExtensions clears cache but keeps extension data.
+// POST /cache/clear/exceptExtensions
+func (c *Client) ClearCacheExceptExtensions(ctx context.Context, ids []string) error {
+	req := struct {
+		IDs []string `json:"ids"`
+	}{IDs: ids}
+
+	var resp Response
+	if err := c.doRequest(ctx, "/cache/clear/exceptExtensions", req, &resp); err != nil {
+		return fmt.Errorf("bitbrowser: clear cache except extensions failed: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("bitbrowser: clear cache except extensions failed: %s", resp.Msg)
+	}
+	return nil
+}
+
+// ============================================================================
+// Fingerprint Management
+// ============================================================================
+
+// RandomizeFingerprint randomizes the fingerprint for a profile.
+// POST /browser/fingerprint/random
+func (c *Client) RandomizeFingerprint(ctx context.Context, browserID string) (*Fingerprint, error) {
+	req := struct {
+		BrowserID string `json:"browserId"`
+	}{BrowserID: browserID}
+
+	var resp Response
+	if err := c.doRequest(ctx, "/browser/fingerprint/random", req, &resp); err != nil {
+		return nil, fmt.Errorf("bitbrowser: randomize fingerprint failed: %w", err)
+	}
+	if !resp.Success {
+		return nil, fmt.Errorf("bitbrowser: randomize fingerprint failed: %s", resp.Msg)
+	}
+
+	var result Fingerprint
+	if err := json.Unmarshal(resp.Data, &result); err != nil {
+		return nil, fmt.Errorf("bitbrowser: failed to parse response: %w", err)
+	}
+	return &result, nil
+}
+
+// ============================================================================
+// Cookie Management
+// ============================================================================
+
+// SetCookies sets cookies for an open browser.
+// POST /browser/cookies/set
+func (c *Client) SetCookies(ctx context.Context, browserID string, cookies []Cookie) error {
+	req := SetCookiesRequest{
+		BrowserID: browserID,
+		Cookies:   cookies,
+	}
+
+	var resp Response
+	if err := c.doRequest(ctx, "/browser/cookies/set", req, &resp); err != nil {
+		return fmt.Errorf("bitbrowser: set cookies failed: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("bitbrowser: set cookies failed: %s", resp.Msg)
+	}
+	return nil
+}
+
+// GetCookies gets real-time cookies from an open browser.
+// POST /browser/cookies/get
+func (c *Client) GetCookies(ctx context.Context, browserID string) ([]Cookie, error) {
+	req := struct {
+		BrowserID string `json:"browserId"`
+	}{BrowserID: browserID}
+
+	var resp Response
+	if err := c.doRequest(ctx, "/browser/cookies/get", req, &resp); err != nil {
+		return nil, fmt.Errorf("bitbrowser: get cookies failed: %w", err)
+	}
+	if !resp.Success {
+		return nil, fmt.Errorf("bitbrowser: get cookies failed: %s", resp.Msg)
+	}
+
+	var result []Cookie
+	if err := json.Unmarshal(resp.Data, &result); err != nil {
+		return nil, fmt.Errorf("bitbrowser: failed to parse response: %w", err)
+	}
+	return result, nil
+}
+
+// ClearCookies clears cookies for a profile.
+// POST /browser/cookies/clear
+func (c *Client) ClearCookies(ctx context.Context, browserID string, saveSynced bool) error {
+	req := ClearCookiesRequest{
+		BrowserID:  browserID,
+		SaveSynced: saveSynced,
+	}
+
+	var resp Response
+	if err := c.doRequest(ctx, "/browser/cookies/clear", req, &resp); err != nil {
+		return fmt.Errorf("bitbrowser: clear cookies failed: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("bitbrowser: clear cookies failed: %s", resp.Msg)
+	}
+	return nil
+}
+
+// FormatCookies formats cookies to standard format.
+// POST /browser/cookies/format
+func (c *Client) FormatCookies(ctx context.Context, cookie any, hostname string) ([]Cookie, error) {
+	req := FormatCookiesRequest{
+		Cookie:   cookie,
+		Hostname: hostname,
+	}
+
+	var resp Response
+	if err := c.doRequest(ctx, "/browser/cookies/format", req, &resp); err != nil {
+		return nil, fmt.Errorf("bitbrowser: format cookies failed: %w", err)
+	}
+	if !resp.Success {
+		return nil, fmt.Errorf("bitbrowser: format cookies failed: %s", resp.Msg)
+	}
+
+	var result []Cookie
+	if err := json.Unmarshal(resp.Data, &result); err != nil {
+		return nil, fmt.Errorf("bitbrowser: failed to parse response: %w", err)
+	}
+	return result, nil
+}
+
+// ============================================================================
+// Display Management
+// ============================================================================
+
+// GetAllDisplays gets information about all connected displays.
+// POST /alldisplays
+func (c *Client) GetAllDisplays(ctx context.Context) ([]Display, error) {
+	var resp Response
+	if err := c.doRequest(ctx, "/alldisplays", struct{}{}, &resp); err != nil {
+		return nil, fmt.Errorf("bitbrowser: get displays failed: %w", err)
+	}
+	if !resp.Success {
+		return nil, fmt.Errorf("bitbrowser: get displays failed: %s", resp.Msg)
+	}
+
+	var result []Display
+	if err := json.Unmarshal(resp.Data, &result); err != nil {
+		return nil, fmt.Errorf("bitbrowser: failed to parse response: %w", err)
+	}
+	return result, nil
+}
+
+// ============================================================================
+// RPA Management
+// ============================================================================
+
+// RunRPA starts an RPA task.
+// POST /rpa/run
+func (c *Client) RunRPA(ctx context.Context, taskID string) error {
+	req := RPARequest{ID: taskID}
+
+	var resp Response
+	if err := c.doRequest(ctx, "/rpa/run", req, &resp); err != nil {
+		return fmt.Errorf("bitbrowser: run RPA failed: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("bitbrowser: run RPA failed: %s", resp.Msg)
+	}
+	return nil
+}
+
+// StopRPA stops a running RPA task.
+// POST /rpa/stop
+func (c *Client) StopRPA(ctx context.Context, taskID string) error {
+	req := RPARequest{ID: taskID}
+
+	var resp Response
+	if err := c.doRequest(ctx, "/rpa/stop", req, &resp); err != nil {
+		return fmt.Errorf("bitbrowser: stop RPA failed: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("bitbrowser: stop RPA failed: %s", resp.Msg)
+	}
+	return nil
+}
+
+// ============================================================================
+// Utility Functions
+// ============================================================================
+
+// AutoPaste simulates typing from clipboard into the focused input field.
+// POST /autopaste
+func (c *Client) AutoPaste(ctx context.Context, browserID, url string) error {
+	req := AutoPasteRequest{
+		BrowserID: browserID,
+		URL:       url,
+	}
+
+	var resp Response
+	if err := c.doRequest(ctx, "/autopaste", req, &resp); err != nil {
+		return fmt.Errorf("bitbrowser: auto paste failed: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("bitbrowser: auto paste failed: %s", resp.Msg)
+	}
+	return nil
+}
+
+// ReadExcel reads an Excel file from the local filesystem.
+// POST /utils/readexcel
+func (c *Client) ReadExcel(ctx context.Context, filepath string) (any, error) {
+	req := FileRequest{FilePath: filepath}
+
+	var resp Response
+	if err := c.doRequest(ctx, "/utils/readexcel", req, &resp); err != nil {
+		return nil, fmt.Errorf("bitbrowser: read excel failed: %w", err)
+	}
+	if !resp.Success {
+		return nil, fmt.Errorf("bitbrowser: read excel failed: %s", resp.Msg)
+	}
+
+	var result any
+	if err := json.Unmarshal(resp.Data, &result); err != nil {
+		return nil, fmt.Errorf("bitbrowser: failed to parse response: %w", err)
+	}
+	return result, nil
+}
+
+// ReadFile reads a text file from the local filesystem.
+// POST /utils/readfile
+func (c *Client) ReadFile(ctx context.Context, filepath string) (string, error) {
+	req := FileRequest{FilePath: filepath}
+
+	var resp Response
+	if err := c.doRequest(ctx, "/utils/readfile", req, &resp); err != nil {
+		return "", fmt.Errorf("bitbrowser: read file failed: %w", err)
+	}
+	if !resp.Success {
+		return "", fmt.Errorf("bitbrowser: read file failed: %s", resp.Msg)
+	}
+
+	var result string
+	if err := json.Unmarshal(resp.Data, &result); err != nil {
+		// If it's not a string, return the raw JSON
+		return string(resp.Data), nil
+	}
+	return result, nil
+}
+
+// ============================================================================
+// Internal HTTP Helper
+// ============================================================================
+
+// doRequest performs an HTTP POST request to the BitBrowser API.
+func (c *Client) doRequest(ctx context.Context, path string, reqBody any, respBody any) error {
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	url := c.apiURL + path
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(body))
+	}
+
+	if err := json.Unmarshal(body, respBody); err != nil {
+		return fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	return nil
+}
