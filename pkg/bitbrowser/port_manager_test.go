@@ -1,19 +1,8 @@
 package bitbrowser
 
 import (
-	"net"
 	"testing"
 )
-
-// mustNewPortManager is a test helper that creates a PortManager and fails the test on error.
-func mustNewPortManager(t *testing.T, config *PortConfig, host string) *PortManager {
-	t.Helper()
-	pm, err := NewPortManager(config, host)
-	if err != nil {
-		t.Fatalf("NewPortManager failed: %v", err)
-	}
-	return pm
-}
 
 func TestPortConfig(t *testing.T) {
 	t.Run("DefaultPortConfig returns Native Mode", func(t *testing.T) {
@@ -92,10 +81,7 @@ func TestPortConfig(t *testing.T) {
 
 func TestNewPortManager(t *testing.T) {
 	t.Run("returns nil for nil config", func(t *testing.T) {
-		pm, err := NewPortManager(nil, "")
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
+		pm := NewPortManager(nil)
 		if pm != nil {
 			t.Error("NewPortManager(nil) should return nil")
 		}
@@ -103,10 +89,7 @@ func TestNewPortManager(t *testing.T) {
 
 	t.Run("returns nil for Native Mode config", func(t *testing.T) {
 		config := DefaultPortConfig()
-		pm, err := NewPortManager(config, "127.0.0.1")
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
+		pm := NewPortManager(config)
 		if pm != nil {
 			t.Error("NewPortManager should return nil for Native Mode")
 		}
@@ -117,26 +100,12 @@ func TestNewPortManager(t *testing.T) {
 			MinPort: 50000,
 			MaxPort: 51000,
 		}
-		pm, err := NewPortManager(config, "127.0.0.1")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		pm := NewPortManager(config)
 		if pm == nil {
 			t.Error("NewPortManager should return non-nil for Managed Mode")
 		}
 		if !pm.IsActive() {
 			t.Error("IsActive() should return true")
-		}
-	})
-
-	t.Run("returns error for Managed Mode with empty host", func(t *testing.T) {
-		config := &PortConfig{
-			MinPort: 50000,
-			MaxPort: 51000,
-		}
-		_, err := NewPortManager(config, "")
-		if err == nil {
-			t.Error("NewPortManager should return error for Managed Mode with empty host")
 		}
 	})
 }
@@ -155,7 +124,7 @@ func TestPortManager_PickPort(t *testing.T) {
 			MinPort: 59000,
 			MaxPort: 59010,
 		}
-		pm := mustNewPortManager(t, config, "127.0.0.1")
+		pm := NewPortManager(config)
 
 		port, err := pm.PickPort()
 		if err != nil {
@@ -172,10 +141,10 @@ func TestPortManager_PickPort(t *testing.T) {
 			MinPort: 59000,
 			MaxPort: 59100,
 		}
-		pm := mustNewPortManager(t, config, "127.0.0.1")
+		pm := NewPortManager(config)
 
 		ports := make(map[int]bool)
-		for i := 0; i < 10; i++ {
+		for i := 0; i < 20; i++ {
 			port, err := pm.PickPort()
 			if err != nil {
 				t.Fatalf("PickPort failed: %v", err)
@@ -183,107 +152,11 @@ func TestPortManager_PickPort(t *testing.T) {
 			ports[port] = true
 		}
 
-		// With 100 ports and 10 picks, we should have multiple unique ports
+		// With 100 ports and 20 picks, we should have multiple unique ports
 		// (statistically very likely)
 		if len(ports) < 2 {
 			t.Error("PickPort should return varied ports due to randomization")
 		}
-	})
-
-	t.Run("skips ports that are in use", func(t *testing.T) {
-		// Start a listener to occupy a port
-		listener, err := net.Listen("tcp", "127.0.0.1:59500")
-		if err != nil {
-			t.Skipf("Could not start test listener: %v", err)
-		}
-		defer listener.Close()
-
-		// Get the actual port
-		occupiedPort := listener.Addr().(*net.TCPAddr).Port
-
-		config := &PortConfig{
-			MinPort: occupiedPort,
-			MaxPort: occupiedPort + 10,
-		}
-		pm := mustNewPortManager(t, config, "127.0.0.1")
-
-		// PickPort should not return the occupied port
-		port, err := pm.PickPort()
-		if err != nil {
-			t.Fatalf("PickPort failed: %v", err)
-		}
-
-		if port == occupiedPort {
-			t.Errorf("PickPort returned occupied port %d", occupiedPort)
-		}
-	})
-
-	t.Run("returns error when all ports are occupied", func(t *testing.T) {
-		// Use a very small range and occupy all ports
-		basePort := 59600
-		listeners := make([]net.Listener, 3)
-
-		for i := 0; i < 3; i++ {
-			l, err := net.Listen("tcp", "127.0.0.1:0")
-			if err != nil {
-				t.Skipf("Could not start test listener: %v", err)
-			}
-			listeners[i] = l
-		}
-		defer func() {
-			for _, l := range listeners {
-				if l != nil {
-					l.Close()
-				}
-			}
-		}()
-
-		// Get actual ports
-		ports := make([]int, 3)
-		for i, l := range listeners {
-			ports[i] = l.Addr().(*net.TCPAddr).Port
-		}
-
-		// Create a config with just these occupied ports
-		// This is tricky because we can't guarantee sequential ports
-		// So let's use a different approach - create a config with ports we know are occupied
-
-		// Actually, let's create listeners on specific ports
-		for _, l := range listeners {
-			l.Close()
-		}
-
-		listeners2 := make([]net.Listener, 3)
-		for i := 0; i < 3; i++ {
-			l, err := net.Listen("tcp", "127.0.0.1:"+string(rune(basePort+i)))
-			if err != nil {
-				// Port might not be available, skip this test
-				for j := 0; j < i; j++ {
-					listeners2[j].Close()
-				}
-				t.Skip("Could not occupy specific ports for test")
-			}
-			listeners2[i] = l
-		}
-		defer func() {
-			for _, l := range listeners2 {
-				if l != nil {
-					l.Close()
-				}
-			}
-		}()
-
-		// This test is complex due to port availability, just verify the error path works
-		config := &PortConfig{
-			MinPort: 1, // Use invalid port range that's likely occupied
-			MaxPort: 1,
-		}
-		pm := mustNewPortManager(t, config, "127.0.0.1")
-
-		_, err := pm.PickPort()
-		// We expect either success (port 1 is free) or error (port 1 is occupied)
-		// Both are valid outcomes
-		_ = err
 	})
 }
 
@@ -300,7 +173,7 @@ func TestPortManager_IsActive(t *testing.T) {
 			MinPort: 50000,
 			MaxPort: 51000,
 		}
-		pm := mustNewPortManager(t, config, "127.0.0.1")
+		pm := NewPortManager(config)
 		if !pm.IsActive() {
 			t.Error("IsActive() should return true for configured manager")
 		}
@@ -320,7 +193,7 @@ func TestPortManager_GetConfig(t *testing.T) {
 			MinPort: 50000,
 			MaxPort: 51000,
 		}
-		pm := mustNewPortManager(t, config, "127.0.0.1")
+		pm := NewPortManager(config)
 		got := pm.GetConfig()
 		if got != config {
 			t.Error("GetConfig() should return the same config")
@@ -362,13 +235,6 @@ func TestWithPortRange(t *testing.T) {
 			t.Error("portManager should be nil in Native Mode")
 		}
 	})
-
-	t.Run("returns error for invalid URL with Managed Mode", func(t *testing.T) {
-		_, err := New("://invalid", WithPortRange(50000, 51000))
-		if err == nil {
-			t.Error("New should return error for invalid URL with Managed Mode")
-		}
-	})
 }
 
 func TestWithPortRetries(t *testing.T) {
@@ -383,65 +249,6 @@ func TestWithPortRetries(t *testing.T) {
 
 		if client.portConfig.MaxRetries != 20 {
 			t.Errorf("MaxRetries = %d, want 20", client.portConfig.MaxRetries)
-		}
-	})
-}
-
-func TestGenerateShuffledPorts(t *testing.T) {
-	config := &PortConfig{
-		MinPort: 50000,
-		MaxPort: 50009,
-	}
-	pm := mustNewPortManager(t, config, "127.0.0.1")
-
-	ports := pm.generateShuffledPorts()
-
-	// Check length
-	if len(ports) != 10 {
-		t.Errorf("len(ports) = %d, want 10", len(ports))
-	}
-
-	// Check all ports are in range
-	for _, port := range ports {
-		if port < 50000 || port > 50009 {
-			t.Errorf("port %d is outside range [50000, 50009]", port)
-		}
-	}
-
-	// Check all ports are unique
-	seen := make(map[int]bool)
-	for _, port := range ports {
-		if seen[port] {
-			t.Errorf("duplicate port %d", port)
-		}
-		seen[port] = true
-	}
-}
-
-func TestIsPortAvailable(t *testing.T) {
-	config := &PortConfig{
-		MinPort: 50000,
-		MaxPort: 51000,
-	}
-	pm := mustNewPortManager(t, config, "127.0.0.1")
-
-	t.Run("returns true for unused port", func(t *testing.T) {
-		// Port 59999 is very likely to be unused
-		if !pm.isPortAvailable(59999) {
-			t.Skip("Port 59999 is unexpectedly in use")
-		}
-	})
-
-	t.Run("returns false for used port", func(t *testing.T) {
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Skipf("Could not start test listener: %v", err)
-		}
-		defer listener.Close()
-
-		port := listener.Addr().(*net.TCPAddr).Port
-		if pm.isPortAvailable(port) {
-			t.Errorf("port %d should be detected as in use", port)
 		}
 	})
 }
