@@ -58,14 +58,26 @@ func main() {
         log.Fatal(err)
     }
 
-    // Open browser with custom debugging port (useful for firewall traversal)
-    result, err := client.OpenWithPort(ctx, profileID, 9222, false)
+    // Open browser with convenient options
+    result, err := client.Open(ctx, profileID, &antidetect.OpenOptions{
+        AllowLAN:          true,  // Allow LAN/remote access
+        IgnoreDefaultUrls: true,  // Start with blank page
+        WaitReady:         true,  // Wait for browser to be ready
+        // Headless:       true,  // Optional: headless mode
+        // Incognito:      true,  // Optional: incognito mode
+        // CustomPort:     9222,  // Optional: fixed debug port
+    })
     if err != nil {
         log.Fatal(err)
     }
 
     fmt.Printf("WebSocket: %s\n", result.Ws)
     fmt.Printf("HTTP: %s\n", result.Http)
+
+    // Verify connection is valid
+    if client.VerifyDebugURL(ctx, result.Http) {
+        fmt.Println("Browser is accessible!")
+    }
 
     // Use with chromedp, playwright-go, or other CDP libraries
     // chromedp.NewRemoteAllocator(ctx, result.Ws)

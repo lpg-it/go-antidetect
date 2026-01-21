@@ -239,7 +239,58 @@ type PartialUpdateRequest struct {
 // Open Browser
 // ============================================================================
 
-// OpenConfig represents options for opening a browser.
+// OpenOptions provides convenient options for opening a browser.
+// This is the recommended way to open browsers with common settings.
+type OpenOptions struct {
+	// Headless runs the browser in headless mode (no GUI).
+	// Note: Headless mode only supports one tab, synced URLs will be ignored.
+	Headless bool
+
+	// AllowLAN allows connections from LAN/public IP instead of only localhost.
+	// This adds --remote-debugging-address=0.0.0.0 to enable remote access.
+	// Useful for accessing the browser from other machines.
+	AllowLAN bool
+
+	// Incognito opens the browser in incognito/private mode.
+	Incognito bool
+
+	// IgnoreDefaultUrls ignores synced URLs and opens a blank page or workbench.
+	// Recommended to set true for automation scripts.
+	IgnoreDefaultUrls bool
+
+	// StartURL specifies a URL to open when the browser starts.
+	// Only works when IgnoreDefaultUrls is true.
+	StartURL string
+
+	// CustomPort specifies a fixed debugging port.
+	// If 0, a random port will be assigned by BitBrowser.
+	// Useful when you need a predictable port.
+	CustomPort int
+
+	// DisableGPU disables GPU hardware acceleration.
+	DisableGPU bool
+
+	// LoadExtensions specifies extension paths to load.
+	// Multiple paths should be comma-separated.
+	// Example: "/path/to/ext1,/path/to/ext2"
+	LoadExtensions string
+
+	// ExtraArgs allows passing additional Chrome arguments.
+	// These are appended to the args array.
+	ExtraArgs []string
+
+	// WaitReady waits for the browser to be fully ready before returning.
+	// If the browser is still starting, it will poll until ready.
+	// Default timeout is 30 seconds.
+	WaitReady bool
+
+	// WaitTimeout specifies the maximum time to wait for browser ready.
+	// Only used when WaitReady is true. Default is 30 seconds.
+	WaitTimeout int
+}
+
+// OpenConfig represents the raw API request for opening a browser.
+// For most use cases, prefer using OpenOptions with the Open method.
 type OpenConfig struct {
 	ID                string   `json:"id"`                          // Profile ID (required)
 	Args              []string `json:"args,omitempty"`              // Chromium launch arguments
@@ -259,6 +310,20 @@ type OpenResult struct {
 	Remark      string `json:"remark"`      // Profile remark
 	GroupID     string `json:"groupId"`     // Group ID
 	PID         int    `json:"pid"`         // Process ID
+}
+
+// ============================================================================
+// Browser Version (CDP)
+// ============================================================================
+
+// BrowserVersion contains browser version information from CDP.
+type BrowserVersion struct {
+	Browser              string `json:"Browser"`
+	ProtocolVersion      string `json:"Protocol-Version"`
+	UserAgent            string `json:"User-Agent"`
+	V8Version            string `json:"V8-Version"`
+	WebKitVersion        string `json:"WebKit-Version"`
+	WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
 }
 
 // ============================================================================

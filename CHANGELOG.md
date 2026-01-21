@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2025-01-21
+
+### Added
+
+- **OpenOptions** - New convenient way to open browsers with common settings:
+  - `Headless` - Run browser in headless mode
+  - `AllowLAN` - Allow LAN/remote access (adds --remote-debugging-address=0.0.0.0)
+  - `Incognito` - Open in incognito/private mode
+  - `IgnoreDefaultUrls` - Start with blank page
+  - `StartURL` - Specify initial URL
+  - `CustomPort` - Fixed debugging port
+  - `DisableGPU` - Disable GPU acceleration
+  - `LoadExtensions` - Load browser extensions
+  - `ExtraArgs` - Additional Chrome arguments
+  - `WaitReady` - Wait for browser to be fully ready
+  - `WaitTimeout` - Custom timeout for waiting
+
+- **VerifyDebugURL** - Verify if a browser debug URL is still accessible
+- **GetBrowserVersion** - Get browser version information via CDP
+- **WaitForReady** - Wait until browser is fully ready
+- **OpenRaw** - Low-level API access for full control
+
+### Changed
+
+- `Open` method now uses `OpenOptions` for convenient configuration
+- Removed `OpenWithPort` (use `Open` with `OpenOptions{CustomPort: port}` instead)
+
 ## [1.0.0] - 2025-01-21
 
 ### Added

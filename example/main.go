@@ -52,10 +52,23 @@ func main() {
 	fmt.Printf("Profile created with ID: %s\n", profileID)
 
 	// ========================================================================
-	// Open Browser with Custom Port (for firewall traversal)
+	// Open Browser with OpenOptions (Recommended)
 	// ========================================================================
-	fmt.Println("\nOpening browser with custom debugging port...")
-	result, err := client.OpenWithPort(ctx, profileID, 9222, false)
+	fmt.Println("\nOpening browser with convenient options...")
+	result, err := client.Open(ctx, profileID, &antidetect.OpenOptions{
+		// Allow connections from LAN (useful for remote access)
+		AllowLAN: true,
+		// Don't open synced URLs, start with blank page
+		IgnoreDefaultUrls: true,
+		// Wait for browser to be fully ready before returning
+		WaitReady: true,
+		// Optional: specify a fixed port
+		// CustomPort: 9222,
+		// Optional: run in headless mode
+		// Headless: true,
+		// Optional: incognito mode
+		// Incognito: true,
+	})
 	if err != nil {
 		log.Fatalf("Failed to open browser: %v", err)
 	}
@@ -65,6 +78,28 @@ func main() {
 	fmt.Printf("  HTTP:      %s\n", result.Http)
 	fmt.Printf("  Driver:    %s\n", result.Driver)
 	fmt.Printf("  PID:       %d\n", result.PID)
+
+	// ========================================================================
+	// Verify Debug URL (useful for caching scenarios)
+	// ========================================================================
+	fmt.Println("\nVerifying debug URL is accessible...")
+	if client.VerifyDebugURL(ctx, result.Http) {
+		fmt.Println("Debug URL is valid and accessible!")
+	} else {
+		fmt.Println("Debug URL is not accessible!")
+	}
+
+	// ========================================================================
+	// Get Browser Version via CDP
+	// ========================================================================
+	fmt.Println("\nGetting browser version...")
+	version, err := client.GetBrowserVersion(ctx, result.Http)
+	if err != nil {
+		fmt.Printf("Failed to get browser version: %v\n", err)
+	} else {
+		fmt.Printf("Browser: %s\n", version.Browser)
+		fmt.Printf("User-Agent: %s\n", version.UserAgent)
+	}
 
 	// ========================================================================
 	// Use with chromedp or other CDP libraries

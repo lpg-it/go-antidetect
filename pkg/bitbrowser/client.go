@@ -211,9 +211,101 @@ func (c *Client) ResetClosingState(ctx context.Context, id string) error {
 // Browser Control
 // ============================================================================
 
-// Open opens a browser instance for the specified profile.
-// POST /browser/open
-func (c *Client) Open(ctx context.Context, config OpenConfig) (*OpenResult, error) {
+// Open opens a browser instance with the specified options.
+// This is the recommended method for opening browsers with convenient options.
+//
+// Example:
+//
+//	result, err := client.Open(ctx, "profile-id", &bitbrowser.OpenOptions{
+//	    Headless:          false,
+//	    AllowLAN:          true,
+//	    IgnoreDefaultUrls: true,
+//	    WaitReady:         true,
+//	})
+func (c *Client) Open(ctx context.Context, id string, opts *OpenOptions) (*OpenResult, error) {
+	if opts == nil {
+		opts = &OpenOptions{}
+	}
+
+	// Build Chrome arguments from options
+	var args []string
+
+	// Custom port
+	if opts.CustomPort > 0 {
+		args = append(args, fmt.Sprintf("--remote-debugging-port=%d", opts.CustomPort))
+	}
+
+	// Allow LAN access
+	if opts.AllowLAN {
+		args = append(args, "--remote-debugging-address=0.0.0.0")
+	}
+
+	// Headless mode
+	if opts.Headless {
+		args = append(args, "--headless")
+	}
+
+	// Incognito mode
+	if opts.Incognito {
+		args = append(args, "--incognito")
+	}
+
+	// Disable GPU
+	if opts.DisableGPU {
+		args = append(args, "--disable-gpu")
+	}
+
+	// Load extensions
+	if opts.LoadExtensions != "" {
+		args = append(args, fmt.Sprintf("--load-extension=%s", opts.LoadExtensions))
+	}
+
+	// Extra args
+	args = append(args, opts.ExtraArgs...)
+
+	// Build request
+	config := OpenConfig{
+		ID:                id,
+		Args:              args,
+		Queue:             true, // Always use queue mode for stability
+		IgnoreDefaultUrls: opts.IgnoreDefaultUrls || opts.Headless, // Headless requires this
+		NewPageUrl:        opts.StartURL,
+	}
+
+	var resp Response
+	if err := c.doRequest(ctx, "/browser/open", config, &resp); err != nil {
+		return nil, fmt.Errorf("bitbrowser: open browser failed: %w", err)
+	}
+	if !resp.Success {
+		// Check if browser is still starting
+		if opts.WaitReady && strings.Contains(resp.Msg, "正在打开") {
+			return c.waitForBrowserReady(ctx, id, opts)
+		}
+		return nil, fmt.Errorf("bitbrowser: open browser failed: %s", resp.Msg)
+	}
+
+	var result OpenResult
+	if err := json.Unmarshal(resp.Data, &result); err != nil {
+		return nil, fmt.Errorf("bitbrowser: failed to parse response: %w", err)
+	}
+
+	// Ensure HTTP endpoint has protocol prefix
+	if result.Http != "" && !strings.HasPrefix(result.Http, "http://") {
+		result.Http = "http://" + result.Http
+	}
+
+	// If result is empty but WaitReady is enabled, wait for browser
+	if result.Http == "" && opts.WaitReady {
+		return c.waitForBrowserReady(ctx, id, opts)
+	}
+
+	return &result, nil
+}
+
+// OpenRaw opens a browser using the raw API configuration.
+// Use this when you need full control over the request parameters.
+// For most cases, prefer using Open with OpenOptions instead.
+func (c *Client) OpenRaw(ctx context.Context, config OpenConfig) (*OpenResult, error) {
 	var resp Response
 	if err := c.doRequest(ctx, "/browser/open", config, &resp); err != nil {
 		return nil, fmt.Errorf("bitbrowser: open browser failed: %w", err)
@@ -235,24 +327,135 @@ func (c *Client) Open(ctx context.Context, config OpenConfig) (*OpenResult, erro
 	return &result, nil
 }
 
-// OpenWithPort opens a browser with a custom debugging port.
-// This is a convenience method that sets up the args for custom port.
-func (c *Client) OpenWithPort(ctx context.Context, id string, port int, headless bool) (*OpenResult, error) {
-	var args []string
-	if port > 0 {
-		args = append(args, fmt.Sprintf("--remote-debugging-port=%d", port))
-		args = append(args, "--remote-debugging-address=0.0.0.0")
-	}
-	if headless {
-		args = append(args, "--headless")
+// waitForBrowserReady polls until the browser is ready.
+func (c *Client) waitForBrowserReady(ctx context.Context, id string, opts *OpenOptions) (*OpenResult, error) {
+	timeout := opts.WaitTimeout
+	if timeout <= 0 {
+		timeout = 30 // Default 30 seconds
 	}
 
-	return c.Open(ctx, OpenConfig{
-		ID:    id,
-		Args:  args,
-		Queue: true,
-	})
+	const pollInterval = 2 * time.Second
+	maxAttempts := timeout / 2
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(pollInterval):
+		}
+
+		// Try to get browser ports to check if it's ready
+		ports, err := c.GetPorts(ctx)
+		if err == nil {
+			if port, ok := ports[id]; ok && port != "" {
+				// Browser is ready, construct result
+				httpEndpoint := "http://127.0.0.1:" + port
+				if opts.AllowLAN {
+					httpEndpoint = "http://0.0.0.0:" + port
+				}
+
+				// Get WebSocket URL from browser
+				version, verr := c.GetBrowserVersion(ctx, httpEndpoint)
+				if verr == nil && version.WebSocketDebuggerURL != "" {
+					return &OpenResult{
+						Http: httpEndpoint,
+						Ws:   version.WebSocketDebuggerURL,
+					}, nil
+				}
+
+				return &OpenResult{
+					Http: httpEndpoint,
+				}, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("bitbrowser: browser not ready after %d seconds", timeout)
 }
+
+// WaitForReady waits until the browser is fully ready and returns connection info.
+// This is useful when you need to ensure the browser is ready before connecting.
+func (c *Client) WaitForReady(ctx context.Context, id string, timeoutSeconds int) (*OpenResult, error) {
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 30
+	}
+
+	opts := &OpenOptions{
+		WaitReady:   true,
+		WaitTimeout: timeoutSeconds,
+	}
+
+	return c.waitForBrowserReady(ctx, id, opts)
+}
+
+// ============================================================================
+// Connection Verification
+// ============================================================================
+
+// VerifyDebugURL checks if a browser debug URL is still valid and accessible.
+// This is useful for verifying cached debug URLs before attempting to connect.
+func (c *Client) VerifyDebugURL(ctx context.Context, httpEndpoint string) bool {
+	if httpEndpoint == "" {
+		return false
+	}
+
+	// Create a short timeout context
+	verifyCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	// Try to access /json/version endpoint
+	versionURL := strings.TrimSuffix(httpEndpoint, "/") + "/json/version"
+	req, err := http.NewRequestWithContext(verifyCtx, http.MethodGet, versionURL, nil)
+	if err != nil {
+		return false
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+
+	return resp.StatusCode == http.StatusOK
+}
+
+// GetBrowserVersion gets the browser version information via CDP.
+// The httpEndpoint should be the debug HTTP address (e.g., "http://127.0.0.1:9222").
+func (c *Client) GetBrowserVersion(ctx context.Context, httpEndpoint string) (*BrowserVersion, error) {
+	if httpEndpoint == "" {
+		return nil, fmt.Errorf("bitbrowser: httpEndpoint is required")
+	}
+
+	versionURL := strings.TrimSuffix(httpEndpoint, "/") + "/json/version"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, versionURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("bitbrowser: failed to create request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("bitbrowser: failed to get browser version: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("bitbrowser: unexpected status code: %d", resp.StatusCode)
+	}
+
+	var version BrowserVersion
+	if err := json.NewDecoder(resp.Body).Decode(&version); err != nil {
+		return nil, fmt.Errorf("bitbrowser: failed to parse version: %w", err)
+	}
+
+	return &version, nil
+}
+
+// ============================================================================
+// Close Browser
+// ============================================================================
 
 // Close closes a running browser instance.
 // POST /browser/close

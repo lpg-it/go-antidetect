@@ -21,8 +21,11 @@
 //	    Name: "my-profile",
 //	})
 //
-//	// Open the browser with a custom port
-//	result, err := client.OpenWithPort(ctx, id, 9222, false)
+//	// Open the browser with options
+//	result, err := client.Open(ctx, id, &antidetect.OpenOptions{
+//	    AllowLAN:          true,
+//	    IgnoreDefaultUrls: true,
+//	})
 //	fmt.Println("WebSocket:", result.Ws)
 package antidetect
 
@@ -64,11 +67,19 @@ type ProfileConfig = bitbrowser.ProfileConfig
 // Fingerprint represents the browser fingerprint configuration.
 type Fingerprint = bitbrowser.Fingerprint
 
-// OpenConfig represents options for opening a browser.
+// OpenOptions provides convenient options for opening a browser.
+// This is the recommended way to open browsers with common settings.
+type OpenOptions = bitbrowser.OpenOptions
+
+// OpenConfig represents the raw API request for opening a browser.
+// For most use cases, prefer using OpenOptions with the Open method.
 type OpenConfig = bitbrowser.OpenConfig
 
 // OpenResult contains the browser connection information after opening.
 type OpenResult = bitbrowser.OpenResult
+
+// BrowserVersion contains browser version information from CDP.
+type BrowserVersion = bitbrowser.BrowserVersion
 
 // ProfileDetail contains detailed information about a browser profile.
 type ProfileDetail = bitbrowser.ProfileDetail
