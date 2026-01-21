@@ -404,19 +404,78 @@ func (c *Client) openWithManagedPort(ctx context.Context, id string, opts *OpenO
 		args := c.buildManagedArgs(port, opts)
 
 		// Build request
+		// Note: In headless mode, NewPageUrl must be empty (official doc requirement)
+		// "Multiple targets are not supported in headless mode"
+		startURL := opts.StartURL
+		if opts.Headless {
+			startURL = ""
+		}
 		config := OpenConfig{
 			ID:                id,
 			Args:              args,
 			Queue:             true,
 			IgnoreDefaultUrls: opts.IgnoreDefaultUrls || opts.Headless,
-			NewPageUrl:        opts.StartURL,
+			NewPageUrl:        startURL,
 		}
 
 		result, err := c.doOpenRequest(ctx, config)
 		if err == nil {
-			// Success - fix up the HTTP endpoint for remote access
-			if result.Http != "" {
-				result.Http = fmt.Sprintf("http://0.0.0.0:%d", port)
+			// CRITICAL: Verify this browser actually belongs to us
+			// This prevents accidentally controlling another client's browser
+			// The race condition:
+			//   1. We call GetPorts() -> port 50001 is free
+			//   2. Another client opens their browser on port 50001
+			//   3. We request port 50001 -> BitBrowser might return their browser!
+			//
+			// Solution: After opening, call GetPorts() again and verify that
+			// OUR profile ID is mapped to the port we requested.
+			verifyPorts, verifyErr := c.GetPorts(ctx)
+			if verifyErr != nil {
+				if c.logger != nil {
+					c.logger.Warn("bitbrowser: failed to verify port ownership",
+						slog.String("error", verifyErr.Error()),
+					)
+				}
+				// Continue anyway - verification failed but browser might be OK
+			} else {
+				actualPortStr := verifyPorts[id]
+				var actualPort int
+				if actualPortStr != "" {
+					fmt.Sscanf(actualPortStr, "%d", &actualPort)
+				}
+
+				if actualPort != port {
+					// DANGER: The browser we got is NOT ours!
+					// Either:
+					// 1. Our profile didn't actually open (actualPort == 0)
+					// 2. Our profile opened on a different port (shouldn't happen)
+					// 3. BitBrowser returned another browser's info
+					if c.logger != nil {
+						c.logger.Error("bitbrowser: CRITICAL port ownership mismatch",
+							slog.String("profile_id", id),
+							slog.Int("requested_port", port),
+							slog.Int("actual_port", actualPort),
+							slog.String("actual_port_str", actualPortStr),
+							slog.Int("attempt", attempt),
+						)
+					}
+					// Close the browser we opened to prevent orphan processes
+					if closeErr := c.Close(ctx, id); closeErr != nil {
+						if c.logger != nil {
+							c.logger.Warn("bitbrowser: failed to close browser after port mismatch",
+								slog.String("profile_id", id),
+								slog.String("error", closeErr.Error()),
+							)
+						}
+					}
+					lastErr = fmt.Errorf("port ownership mismatch: profile %s should be on port %d but GetPorts shows port %d", id, port, actualPort)
+					continue
+				}
+			}
+
+			// Ensure HTTP endpoint has protocol prefix
+			if result.Http != "" && !strings.HasPrefix(result.Http, "http://") {
+				result.Http = "http://" + result.Http
 			}
 			return result, nil
 		}
@@ -462,6 +521,7 @@ func (c *Client) getUsedPortsSet(ctx context.Context) (map[int]bool, error) {
 	return usedPorts, nil
 }
 
+
 // openNative opens a browser using Native Mode (BitBrowser-managed ports).
 func (c *Client) openNative(ctx context.Context, id string, opts *OpenOptions) (*OpenResult, error) {
 	// Log warning if remote access might be needed
@@ -474,12 +534,18 @@ func (c *Client) openNative(ctx context.Context, id string, opts *OpenOptions) (
 	args := c.buildNativeArgs(opts)
 
 	// Build request
+	// Note: In headless mode, NewPageUrl must be empty (official doc requirement)
+	// "Multiple targets are not supported in headless mode"
+	startURL := opts.StartURL
+	if opts.Headless {
+		startURL = ""
+	}
 	config := OpenConfig{
 		ID:                id,
 		Args:              args,
 		Queue:             true,
 		IgnoreDefaultUrls: opts.IgnoreDefaultUrls || opts.Headless,
-		NewPageUrl:        opts.StartURL,
+		NewPageUrl:        startURL,
 	}
 
 	var resp Response
@@ -612,12 +678,14 @@ func (c *Client) isPortConflictError(err error) bool {
 		return false
 	}
 	errMsg := strings.ToLower(err.Error())
-	// Common port conflict indicators
-	return strings.Contains(errMsg, "port") ||
-		strings.Contains(errMsg, "address already in use") ||
-		strings.Contains(errMsg, "端口") ||
-		strings.Contains(errMsg, "already") ||
-		strings.Contains(errMsg, "occupied")
+	// Common port conflict indicators - be specific to avoid false positives
+	// (e.g., "profile already opened" is NOT a port conflict)
+	return strings.Contains(errMsg, "address already in use") ||
+		strings.Contains(errMsg, "port is already in use") ||
+		strings.Contains(errMsg, "端口被占用") ||
+		strings.Contains(errMsg, "端口已被") ||
+		strings.Contains(errMsg, "port occupied") ||
+		strings.Contains(errMsg, "bind: address already in use")
 }
 
 // OpenRaw opens a browser using the raw API configuration.

@@ -3,29 +3,28 @@ package bitbrowser
 import (
 	"fmt"
 	"math/rand/v2"
-	"net"
-	"time"
 )
 
 // PortManager handles port allocation in Managed Mode.
-// It uses a stateless "random probe + TCP check" mechanism
-// to avoid conflicts in multi-service environments.
+// It uses a stateless random selection mechanism combined with
+// the BitBrowser API to avoid port conflicts.
 //
 // The algorithm:
-//  1. Generate a shuffled list of all ports in the range
-//  2. For each port, perform a TCP probe to check availability
-//  3. Return the first available port
-//  4. If all ports are busy, return an error
+//  1. Query BitBrowser API to get currently used ports
+//  2. Generate a shuffled list of all ports in the configured range
+//  3. Exclude ports already used by BitBrowser
+//  4. Return the first available port from the shuffled list
 //
-// This approach is stateless and concurrency-safe, as it doesn't
-// rely on memory-based bookkeeping that could become stale.
+// This approach is stateless and concurrency-safe, as it queries
+// the actual port usage from the API rather than relying on
+// memory-based bookkeeping that could become stale.
 type PortManager struct {
 	config *PortConfig
-	host   string // Remote host to probe (extracted from API URL)
+	host   string // Remote host (extracted from API URL)
 }
 
 // NewPortManager creates a new PortManager with the given configuration.
-// The host parameter is the BitBrowser server host, used for port probing.
+// The host parameter is the BitBrowser server host.
 //
 // Returns nil if Managed Mode is not enabled (config is nil or port range not configured).
 // Returns an error if Managed Mode is enabled but host is empty.
@@ -96,23 +95,6 @@ func (pm *PortManager) generateShuffledPorts() []int {
 	return ports
 }
 
-// isPortAvailable checks if a port is available by attempting a TCP connection.
-// Returns true if the port is NOT in use (connection refused or timeout).
-// Returns false if the port IS in use (connection succeeded).
-func (pm *PortManager) isPortAvailable(port int) bool {
-	address := net.JoinHostPort(pm.host, fmt.Sprintf("%d", port))
-
-	conn, err := net.DialTimeout("tcp", address, 200*time.Millisecond)
-	if err != nil {
-		// Connection failed = port is available (not listening)
-		// This includes: connection refused, timeout, host unreachable, etc.
-		return true
-	}
-
-	// Connection succeeded = port is in use (something is listening)
-	conn.Close()
-	return false
-}
 
 // IsActive returns true if the PortManager is configured and active.
 func (pm *PortManager) IsActive() bool {

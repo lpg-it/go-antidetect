@@ -1,7 +1,6 @@
 package bitbrowser
 
 import (
-	"net"
 	"testing"
 )
 
@@ -192,31 +191,47 @@ func TestPortManager_PickPort(t *testing.T) {
 		}
 	})
 
-	t.Run("skips ports that are in use", func(t *testing.T) {
-		// Start a listener to occupy a port
-		listener, err := net.Listen("tcp", "127.0.0.1:59500")
-		if err != nil {
-			t.Skipf("Could not start test listener: %v", err)
-		}
-		defer listener.Close()
-
-		// Get the actual port
-		occupiedPort := listener.Addr().(*net.TCPAddr).Port
-
+	t.Run("PickPortExcluding respects excluded ports", func(t *testing.T) {
 		config := &PortConfig{
-			MinPort: occupiedPort,
-			MaxPort: occupiedPort + 10,
+			MinPort: 59500,
+			MaxPort: 59510,
 		}
 		pm := mustNewPortManager(t, config, "127.0.0.1")
 
-		// PickPort should not return the occupied port
-		port, err := pm.PickPort()
-		if err != nil {
-			t.Fatalf("PickPort failed: %v", err)
+		// Create an excluded set containing most ports
+		excluded := make(map[int]bool)
+		for i := 59500; i <= 59509; i++ {
+			excluded[i] = true
 		}
 
-		if port == occupiedPort {
-			t.Errorf("PickPort returned occupied port %d", occupiedPort)
+		// Only port 59510 should be available
+		port, err := pm.PickPortExcluding(excluded)
+		if err != nil {
+			t.Fatalf("PickPortExcluding failed: %v", err)
+		}
+
+		if port != 59510 {
+			t.Errorf("PickPortExcluding returned %d, expected 59510 (the only non-excluded port)", port)
+		}
+	})
+
+	t.Run("PickPortExcluding returns error when all ports excluded", func(t *testing.T) {
+		config := &PortConfig{
+			MinPort: 59500,
+			MaxPort: 59502,
+		}
+		pm := mustNewPortManager(t, config, "127.0.0.1")
+
+		// Exclude all ports
+		excluded := map[int]bool{
+			59500: true,
+			59501: true,
+			59502: true,
+		}
+
+		_, err := pm.PickPortExcluding(excluded)
+		if err == nil {
+			t.Error("PickPortExcluding should return error when all ports are excluded")
 		}
 	})
 }
@@ -321,30 +336,3 @@ func TestWithPortRetries(t *testing.T) {
 	})
 }
 
-func TestIsPortAvailable(t *testing.T) {
-	config := &PortConfig{
-		MinPort: 50000,
-		MaxPort: 51000,
-	}
-	pm := mustNewPortManager(t, config, "127.0.0.1")
-
-	t.Run("returns true for unused port", func(t *testing.T) {
-		// Port 59999 is very likely to be unused
-		if !pm.isPortAvailable(59999) {
-			t.Skip("Port 59999 is unexpectedly in use")
-		}
-	})
-
-	t.Run("returns false for used port", func(t *testing.T) {
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Skipf("Could not start test listener: %v", err)
-		}
-		defer listener.Close()
-
-		port := listener.Addr().(*net.TCPAddr).Port
-		if pm.isPortAvailable(port) {
-			t.Errorf("port %d should be detected as in use", port)
-		}
-	})
-}
