@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -23,8 +25,11 @@ const (
 
 // Client is the BitBrowser API client.
 type Client struct {
-	apiURL     string
-	httpClient *http.Client
+	apiURL      string
+	httpClient  *http.Client
+	apiKey      string // API token for authentication (x-api-key header)
+	logger      *slog.Logger
+	retryConfig *RetryConfig
 }
 
 // ClientOption is a function that configures a Client.
@@ -35,6 +40,19 @@ type ClientOption func(*Client)
 func WithHTTPClient(httpClient *http.Client) ClientOption {
 	return func(c *Client) {
 		c.httpClient = httpClient
+	}
+}
+
+// WithAPIKey sets the API key for authentication.
+// The key will be sent in the "x-api-key" header with each request.
+// You can find your API key in BitBrowser settings.
+//
+// Example:
+//
+//	client := bitbrowser.New(apiURL, bitbrowser.WithAPIKey("56d2b7c905"))
+func WithAPIKey(apiKey string) ClientOption {
+	return func(c *Client) {
+		c.apiKey = apiKey
 	}
 }
 
@@ -55,8 +73,9 @@ func WithHTTPClient(httpClient *http.Client) ClientOption {
 //	}))
 func New(apiURL string, opts ...ClientOption) *Client {
 	c := &Client{
-		apiURL:     strings.TrimRight(apiURL, "/"),
-		httpClient: &http.Client{}, // No timeout - controlled by context
+		apiURL:      strings.TrimRight(apiURL, "/"),
+		httpClient:  &http.Client{}, // No timeout - controlled by context
+		retryConfig: DefaultRetryConfig(),
 	}
 
 	for _, opt := range opts {
@@ -118,7 +137,7 @@ func (c *Client) CreateProfile(ctx context.Context, config ProfileConfig) (strin
 // POST /browser/update
 func (c *Client) UpdateProfile(ctx context.Context, config ProfileConfig) error {
 	if config.ID == "" {
-		return fmt.Errorf("bitbrowser: profile ID is required for update")
+		return NewValidationError("id", "profile ID is required for update")
 	}
 
 	var resp Response
@@ -403,7 +422,7 @@ func (c *Client) waitForBrowserReady(ctx context.Context, id string, opts *OpenO
 		}
 	}
 
-	return nil, fmt.Errorf("bitbrowser: browser not ready after %d seconds", timeout)
+	return nil, NewTimeoutError("wait_for_browser_ready", (time.Duration(timeout) * time.Second).String(), nil)
 }
 
 // WaitForReady waits until the browser is fully ready and returns connection info.
@@ -453,28 +472,31 @@ func (c *Client) VerifyDebugURL(ctx context.Context, httpEndpoint string) bool {
 // The httpEndpoint should be the debug HTTP address (e.g., "http://127.0.0.1:9222").
 func (c *Client) GetBrowserVersion(ctx context.Context, httpEndpoint string) (*BrowserVersion, error) {
 	if httpEndpoint == "" {
-		return nil, fmt.Errorf("bitbrowser: httpEndpoint is required")
+		return nil, NewValidationError("httpEndpoint", "httpEndpoint is required")
 	}
 
 	versionURL := strings.TrimSuffix(httpEndpoint, "/") + "/json/version"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, versionURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("bitbrowser: failed to create request: %w", err)
+		return nil, NewNetworkError("create_request", versionURL, err)
 	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("bitbrowser: failed to get browser version: %w", err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, NewTimeoutError("get_browser_version", "", err)
+		}
+		return nil, NewNetworkError("http_request", versionURL, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("bitbrowser: unexpected status code: %d", resp.StatusCode)
+		return nil, NewAPIError("/json/version", resp.StatusCode, "unexpected status code")
 	}
 
 	var version BrowserVersion
 	if err := json.NewDecoder(resp.Body).Decode(&version); err != nil {
-		return nil, fmt.Errorf("bitbrowser: failed to parse version: %w", err)
+		return nil, NewAPIError("/json/version", resp.StatusCode, "failed to parse version: "+err.Error())
 	}
 
 	return &version, nil
@@ -1003,39 +1025,81 @@ func (c *Client) ReadFile(ctx context.Context, filepath string) (string, error) 
 // Internal HTTP Helper
 // ============================================================================
 
-// doRequest performs an HTTP POST request to the BitBrowser API.
+// doRequest performs an HTTP POST request to the BitBrowser API with retry logic.
 func (c *Client) doRequest(ctx context.Context, path string, reqBody any, respBody any) error {
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
-		return fmt.Errorf("failed to marshal request: %w", err)
+		return &ValidationError{
+			Field:   "request_body",
+			Message: "failed to marshal request: " + err.Error(),
+		}
 	}
 
+	c.logRequest(ctx, http.MethodPost, path, reqBody)
+	start := time.Now()
+
+	r := newRetryer(c.retryConfig)
+	attempt := 0
+
+	err = r.do(ctx, func() error {
+		attempt++
+		execErr := c.executeRequest(ctx, path, jsonData, respBody)
+		if execErr != nil {
+			c.logError(ctx, path, execErr, attempt)
+		}
+		return execErr
+	})
+
+	duration := time.Since(start)
+	success := err == nil
+
+	// Log the final response
+	c.logResponse(ctx, path, 0, duration, success)
+
+	return err
+}
+
+// executeRequest performs a single HTTP POST request without retry.
+func (c *Client) executeRequest(ctx context.Context, path string, jsonData []byte, respBody any) error {
 	url := c.apiURL + path
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonData))
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return NewNetworkError("create_request", url, err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 
+	// Add API key authentication header if configured
+	if c.apiKey != "" {
+		req.Header.Set("x-api-key", c.apiKey)
+	}
+
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("request failed: %w", err)
+		// Check if it's a context error
+		if errors.Is(err, context.DeadlineExceeded) {
+			return NewTimeoutError("http_request", "", err)
+		}
+		if errors.Is(err, context.Canceled) {
+			return err
+		}
+		return NewNetworkError("http_request", url, err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to read response: %w", err)
+		return NewNetworkError("read_response", url, err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(body))
+		return NewAPIError(path, resp.StatusCode, string(body))
 	}
 
 	if err := json.Unmarshal(body, respBody); err != nil {
-		return fmt.Errorf("failed to unmarshal response: %w", err)
+		return NewAPIError(path, resp.StatusCode, "failed to unmarshal response: "+err.Error())
 	}
 
 	return nil
 }
+
