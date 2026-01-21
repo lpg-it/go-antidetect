@@ -284,9 +284,13 @@ type OpenOptions struct {
 	// Default timeout is 30 seconds.
 	WaitReady bool
 
-	// WaitTimeout specifies the maximum time to wait for browser ready.
+	// WaitTimeout specifies the maximum time in seconds to wait for browser ready.
 	// Only used when WaitReady is true. Default is 30 seconds.
 	WaitTimeout int
+
+	// PollInterval specifies the interval in seconds between browser ready checks.
+	// Only used when WaitReady is true. Default is 2 seconds.
+	PollInterval int
 }
 
 // OpenConfig represents the raw API request for opening a browser.

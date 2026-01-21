@@ -51,10 +51,31 @@ const (
 // BitBrowserClient is an alias for the BitBrowser client.
 type BitBrowserClient = bitbrowser.Client
 
+// BitBrowserOption is a function that configures a BitBrowser client.
+type BitBrowserOption = bitbrowser.ClientOption
+
+// WithHTTPClient sets a custom HTTP client for the BitBrowser client.
+// Use this to configure custom transport settings.
+//
+// Note: Timeouts should be controlled via context.Context, not HTTP client timeout.
+var WithHTTPClient = bitbrowser.WithHTTPClient
+
 // NewBitBrowser creates a new BitBrowser client.
 // apiURL should be the BitBrowser API endpoint, e.g., "http://127.0.0.1:54345".
-func NewBitBrowser(apiURL string) *BitBrowserClient {
-	return bitbrowser.New(apiURL)
+//
+// By default, no timeout is set. Timeouts should be controlled via context:
+//
+//	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+//	defer cancel()
+//	client.Open(ctx, id, opts)
+//
+// To customize the HTTP client:
+//
+//	client := antidetect.NewBitBrowser(apiURL, antidetect.WithHTTPClient(&http.Client{
+//	    Transport: customTransport,
+//	}))
+func NewBitBrowser(apiURL string, opts ...BitBrowserOption) *BitBrowserClient {
+	return bitbrowser.New(apiURL, opts...)
 }
 
 // ============================================================================

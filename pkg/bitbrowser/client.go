@@ -27,15 +27,43 @@ type Client struct {
 	httpClient *http.Client
 }
 
+// ClientOption is a function that configures a Client.
+type ClientOption func(*Client)
+
+// WithHTTPClient sets a custom HTTP client.
+// Use this to configure timeouts, transport settings, etc.
+func WithHTTPClient(httpClient *http.Client) ClientOption {
+	return func(c *Client) {
+		c.httpClient = httpClient
+	}
+}
+
 // New creates a new BitBrowser client.
 // apiURL should be the BitBrowser API endpoint, e.g., "http://127.0.0.1:54345".
-func New(apiURL string) *Client {
-	return &Client{
-		apiURL: strings.TrimRight(apiURL, "/"),
-		httpClient: &http.Client{
-			Timeout: 60 * time.Second,
-		},
+//
+// By default, no timeout is set on the HTTP client. Timeouts should be controlled
+// via context.Context passed to each method call:
+//
+//	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+//	defer cancel()
+//	client.Open(ctx, id, opts)
+//
+// To customize the HTTP client (e.g., for custom transport or timeouts):
+//
+//	client := bitbrowser.New(apiURL, bitbrowser.WithHTTPClient(&http.Client{
+//	    Timeout: 2 * time.Minute,
+//	}))
+func New(apiURL string, opts ...ClientOption) *Client {
+	c := &Client{
+		apiURL:     strings.TrimRight(apiURL, "/"),
+		httpClient: &http.Client{}, // No timeout - controlled by context
 	}
+
+	for _, opt := range opts {
+		opt(c)
+	}
+
+	return c
 }
 
 // ============================================================================
@@ -334,13 +362,15 @@ func (c *Client) waitForBrowserReady(ctx context.Context, id string, opts *OpenO
 		timeout = 30 // Default 30 seconds
 	}
 
-	const pollInterval = 2 * time.Second
-	maxAttempts := timeout / 2
-	if maxAttempts < 1 {
-		maxAttempts = 1
+	pollIntervalSec := opts.PollInterval
+	if pollIntervalSec <= 0 {
+		pollIntervalSec = 2 // Default 2 seconds
 	}
+	pollInterval := time.Duration(pollIntervalSec) * time.Second
 
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	maxAttempts := max(timeout/pollIntervalSec, 1)
+
+	for range maxAttempts {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -397,18 +427,15 @@ func (c *Client) WaitForReady(ctx context.Context, id string, timeoutSeconds int
 
 // VerifyDebugURL checks if a browser debug URL is still valid and accessible.
 // This is useful for verifying cached debug URLs before attempting to connect.
+// The caller should set an appropriate timeout on the context.
 func (c *Client) VerifyDebugURL(ctx context.Context, httpEndpoint string) bool {
 	if httpEndpoint == "" {
 		return false
 	}
 
-	// Create a short timeout context
-	verifyCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-
 	// Try to access /json/version endpoint
 	versionURL := strings.TrimSuffix(httpEndpoint, "/") + "/json/version"
-	req, err := http.NewRequestWithContext(verifyCtx, http.MethodGet, versionURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, versionURL, nil)
 	if err != nil {
 		return false
 	}

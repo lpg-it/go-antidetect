@@ -13,8 +13,9 @@ func main() {
 	// Create a BitBrowser client - single import, no sub-packages needed!
 	client := antidetect.NewBitBrowser("http://127.0.0.1:54345")
 
-	// Create a context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// Control timeout via context (recommended approach)
+	// All API calls respect this timeout - no hardcoded internal timeouts
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	// ========================================================================
@@ -62,6 +63,9 @@ func main() {
 		IgnoreDefaultUrls: true,
 		// Wait for browser to be fully ready before returning
 		WaitReady: true,
+		// Configure wait behavior (optional, these are defaults)
+		WaitTimeout:  30, // Maximum wait time in seconds
+		PollInterval: 2,  // Check interval in seconds
 		// Optional: specify a fixed port
 		// CustomPort: 9222,
 		// Optional: run in headless mode

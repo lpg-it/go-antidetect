@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2025-01-21
+
+### Fixed
+
+- **Removed hardcoded 60s HTTP timeout** - Timeouts are now controlled by user via `context.Context`
+  - This is the Go-standard approach for timeout control
+  - Users should use `context.WithTimeout()` to set request timeouts
+  - For special cases, use `WithHTTPClient()` option to customize the HTTP client
+
+### Added
+
+- `WithHTTPClient` option for customizing the underlying HTTP client
+- `BitBrowserOption` type for client configuration
+
 ## [1.1.0] - 2025-01-21
 
 ### Added

@@ -10,7 +10,7 @@ Go SDK for controlling antidetect browsers. Provides a unified interface to inte
 
 | Browser | Status | Version |
 |---------|--------|---------|
-| [BitBrowser](https://www.bitbrowser.cn/) (比特浏览器) | ✅ Fully Supported | v1.0.0 |
+| [BitBrowser](https://www.bitbrowser.cn/) (比特浏览器) | ✅ Fully Supported | v1.1.1 |
 | [AdsPower](https://www.adspower.com/) | 🚧 Coming Soon | - |
 
 ## Installation
@@ -33,6 +33,7 @@ import (
     "context"
     "fmt"
     "log"
+    "time"
 
     antidetect "github.com/lpg-it/go-antidetect"
 )
@@ -40,7 +41,10 @@ import (
 func main() {
     // Create client - single import, no sub-packages needed!
     client := antidetect.NewBitBrowser("http://127.0.0.1:54345")
-    ctx := context.Background()
+
+    // Control timeout via context (recommended approach)
+    ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+    defer cancel()
 
     // Check connection
     if err := client.Health(ctx); err != nil {
@@ -63,6 +67,8 @@ func main() {
         AllowLAN:          true,  // Allow LAN/remote access
         IgnoreDefaultUrls: true,  // Start with blank page
         WaitReady:         true,  // Wait for browser to be ready
+        WaitTimeout:       60,    // Wait up to 60 seconds (default: 30)
+        PollInterval:      2,     // Check every 2 seconds (default: 2)
         // Headless:       true,  // Optional: headless mode
         // Incognito:      true,  // Optional: incognito mode
         // CustomPort:     9222,  // Optional: fixed debug port
@@ -74,7 +80,7 @@ func main() {
     fmt.Printf("WebSocket: %s\n", result.Ws)
     fmt.Printf("HTTP: %s\n", result.Http)
 
-    // Verify connection is valid
+    // Verify connection is valid (timeout controlled by ctx)
     if client.VerifyDebugURL(ctx, result.Http) {
         fmt.Println("Browser is accessible!")
     }
@@ -85,6 +91,44 @@ func main() {
     // Close browser when done
     client.Close(ctx, profileID)
 }
+```
+
+## Timeout Control
+
+The SDK follows Go best practices - **no internal hardcoded timeouts**. All timeouts are controlled by the user via `context.Context`:
+
+```go
+// Control timeout via context (recommended)
+ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+defer cancel()
+
+result, err := client.Open(ctx, profileID, opts)
+```
+
+### WaitReady Options
+
+When using `WaitReady: true`, you can configure polling behavior:
+
+```go
+result, err := client.Open(ctx, profileID, &antidetect.OpenOptions{
+    WaitReady:    true,
+    WaitTimeout:  60,  // Maximum wait time in seconds (default: 30)
+    PollInterval: 2,   // Check interval in seconds (default: 2)
+})
+```
+
+### Custom HTTP Client
+
+For advanced scenarios, you can provide a custom HTTP client:
+
+```go
+client := antidetect.NewBitBrowser(apiURL, antidetect.WithHTTPClient(&http.Client{
+    Transport: &http.Transport{
+        MaxIdleConns:       10,
+        IdleConnTimeout:    90 * time.Second,
+        DisableCompression: true,
+    },
+}))
 ```
 
 ## Features
@@ -99,6 +143,12 @@ func main() {
 - Custom debugging port for firewall traversal
 - Headless mode support
 - Queue mode for concurrent operations
+- Wait for browser ready with configurable polling
+
+### Connection Verification
+- `VerifyDebugURL`: Check if debug URL is accessible
+- `GetBrowserVersion`: Get browser version via CDP
+- `WaitForReady`: Wait until browser is fully ready
 
 ### Proxy Management
 - Configure HTTP/HTTPS/SOCKS5/SSH proxies
@@ -145,11 +195,14 @@ func main() {
 
 | Method | Description |
 |--------|-------------|
-| `Open(ctx, config)` | Open a browser with full config |
-| `OpenWithPort(ctx, id, port, headless)` | Open with custom debug port |
+| `Open(ctx, id, opts)` | Open browser with OpenOptions (recommended) |
+| `OpenRaw(ctx, config)` | Open browser with raw OpenConfig |
 | `Close(ctx, id)` | Close a browser |
 | `CloseBySeqs(ctx, seqs)` | Close browsers by sequence numbers |
 | `CloseAll(ctx)` | Close all open browsers |
+| `VerifyDebugURL(ctx, url)` | Check if debug URL is accessible |
+| `GetBrowserVersion(ctx, url)` | Get browser version via CDP |
+| `WaitForReady(ctx, id, timeout)` | Wait for browser to be ready |
 
 </details>
 
@@ -219,6 +272,25 @@ func main() {
 
 ## Configuration Types
 
+### OpenOptions (Recommended)
+
+```go
+antidetect.OpenOptions{
+    Headless:          false,        // Run in headless mode
+    AllowLAN:          true,         // Allow LAN/remote access
+    Incognito:         false,        // Incognito mode
+    IgnoreDefaultUrls: true,         // Start with blank page
+    StartURL:          "",           // URL to open on start
+    CustomPort:        0,            // Fixed debug port (0 = random)
+    DisableGPU:        false,        // Disable GPU acceleration
+    LoadExtensions:    "",           // Extension paths (comma-separated)
+    ExtraArgs:         []string{},   // Additional Chrome args
+    WaitReady:         true,         // Wait for browser ready
+    WaitTimeout:       30,           // Seconds to wait (default: 30)
+    PollInterval:      2,            // Poll interval seconds (default: 2)
+}
+```
+
 ### ProfileConfig
 
 ```go
@@ -245,16 +317,6 @@ antidetect.ProfileConfig{
 }
 ```
 
-### OpenConfig
-
-```go
-antidetect.OpenConfig{
-    ID:    "profile-id",
-    Args:  []string{"--remote-debugging-port=9222"},
-    Queue: true,  // Prevent concurrent startup errors
-}
-```
-
 ## Integration with CDP Libraries
 
 ### chromedp
@@ -262,7 +324,10 @@ antidetect.OpenConfig{
 ```go
 import "github.com/chromedp/chromedp"
 
-result, _ := client.OpenWithPort(ctx, profileID, 9222, false)
+result, _ := client.Open(ctx, profileID, &antidetect.OpenOptions{
+    AllowLAN: true,
+    WaitReady: true,
+})
 
 allocatorCtx, cancel := chromedp.NewRemoteAllocator(ctx, result.Ws)
 defer cancel()
@@ -280,7 +345,10 @@ chromedp.Run(taskCtx,
 ```go
 import "github.com/playwright-community/playwright-go"
 
-result, _ := client.OpenWithPort(ctx, profileID, 9222, false)
+result, _ := client.Open(ctx, profileID, &antidetect.OpenOptions{
+    AllowLAN: true,
+    WaitReady: true,
+})
 
 browser, _ := pw.Chromium.ConnectOverCDP(result.Ws)
 page, _ := browser.NewPage()
@@ -292,7 +360,10 @@ page.Goto("https://example.com")
 ```go
 import "github.com/go-rod/rod"
 
-result, _ := client.OpenWithPort(ctx, profileID, 9222, false)
+result, _ := client.Open(ctx, profileID, &antidetect.OpenOptions{
+    AllowLAN: true,
+    WaitReady: true,
+})
 
 browser := rod.New().ControlURL(result.Ws).MustConnect()
 page := browser.MustPage("https://example.com")
