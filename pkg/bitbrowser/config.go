@@ -9,7 +9,6 @@ package bitbrowser
 // When MinPort and MaxPort are set (non-zero), the SDK takes control of port allocation:
 //   - Randomly selects ports from the specified range
 //   - Forces binding to 0.0.0.0 for remote access
-//   - Uses TCP probe + retry mechanism for conflict resolution
 //   - Recommended range: MinPort=50000, MaxPort=51000
 //
 // Example:
@@ -36,18 +35,13 @@ type PortConfig struct {
 	// MaxPort is the maximum port number in the range (inclusive).
 	// Set to 0 to disable Managed Mode.
 	MaxPort int
-
-	// MaxRetries is the maximum number of retry attempts when port conflicts occur.
-	// Only applicable in Managed Mode. Default is 10.
-	MaxRetries int
 }
 
 // DefaultPortConfig returns a PortConfig with Native Mode (no port management).
 func DefaultPortConfig() *PortConfig {
 	return &PortConfig{
-		MinPort:    0,
-		MaxPort:    0,
-		MaxRetries: 10,
+		MinPort: 0,
+		MaxPort: 0,
 	}
 }
 
@@ -69,7 +63,6 @@ func (c *PortConfig) PortRangeSize() int {
 // When configured, the SDK will:
 //   - Randomly select ports from the range [minPort, maxPort]
 //   - Force binding to 0.0.0.0 for remote access
-//   - Automatically retry on port conflicts
 //
 // Recommended for remote/distributed browser control:
 //
@@ -83,17 +76,5 @@ func WithPortRange(minPort, maxPort int) ClientOption {
 		}
 		c.portConfig.MinPort = minPort
 		c.portConfig.MaxPort = maxPort
-	}
-}
-
-// WithPortRetries sets the maximum number of retry attempts for port allocation.
-// Only applicable when Managed Mode is enabled via WithPortRange.
-// Default is 10 retries.
-func WithPortRetries(maxRetries int) ClientOption {
-	return func(c *Client) {
-		if c.portConfig == nil {
-			c.portConfig = DefaultPortConfig()
-		}
-		c.portConfig.MaxRetries = maxRetries
 	}
 }

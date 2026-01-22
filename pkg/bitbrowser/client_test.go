@@ -395,7 +395,7 @@ func TestOpen(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := mustNew(t,server.URL)
+		client := mustNew(t, server.URL)
 		result, err := client.Open(context.Background(), "profile-123", nil)
 
 		if err != nil {
@@ -443,7 +443,7 @@ func TestOpen(t *testing.T) {
 		})
 		defer server.Close()
 
-		client := mustNew(t,server.URL)
+		client := mustNew(t, server.URL)
 		_, err := client.Open(context.Background(), "profile-123", &OpenOptions{
 			Headless: true,
 			AllowLAN: true,

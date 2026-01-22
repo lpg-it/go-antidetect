@@ -24,9 +24,6 @@ func TestPortConfig(t *testing.T) {
 		if config.MaxPort != 0 {
 			t.Errorf("MaxPort = %d, want 0", config.MaxPort)
 		}
-		if config.MaxRetries != 10 {
-			t.Errorf("MaxRetries = %d, want 10", config.MaxRetries)
-		}
 		if config.IsManaged() {
 			t.Error("IsManaged() should return false for default config")
 		}
@@ -319,20 +316,3 @@ func TestWithPortRange(t *testing.T) {
 		}
 	})
 }
-
-func TestWithPortRetries(t *testing.T) {
-	t.Run("configures max retries", func(t *testing.T) {
-		client, err := New("http://localhost:54345",
-			WithPortRange(50000, 51000),
-			WithPortRetries(20),
-		)
-		if err != nil {
-			t.Fatalf("New failed: %v", err)
-		}
-
-		if client.portConfig.MaxRetries != 20 {
-			t.Errorf("MaxRetries = %d, want 20", client.portConfig.MaxRetries)
-		}
-	})
-}
-

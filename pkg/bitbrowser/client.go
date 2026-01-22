@@ -360,182 +360,66 @@ func (c *Client) Open(ctx context.Context, id string, opts *OpenOptions) (*OpenR
 }
 
 // openWithManagedPort opens a browser with SDK-managed port allocation.
-// It uses the following strategy:
-//  1. Get all ports currently used by BitBrowser via API
-//  2. Exclude those ports from the configured range
-//  3. Randomly pick a port from the remaining available ports
-//  4. If another program is using the port, BitBrowser will fail and SDK retries
+// It allocates a port from the configured range and opens the browser.
+// If the browser is already open, BitBrowser API will return the existing connection info.
 func (c *Client) openWithManagedPort(ctx context.Context, id string, opts *OpenOptions) (*OpenResult, error) {
-	maxRetries := c.portConfig.MaxRetries
-	if maxRetries <= 0 {
-		maxRetries = 10
-	}
-
-	var lastErr error
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		// Get ports currently used by BitBrowser
-		usedPorts, err := c.getUsedPortsSet(ctx)
-		if err != nil {
-			if c.logger != nil {
-				c.logger.Warn("bitbrowser: failed to get used ports, proceeding with random selection",
-					slog.String("error", err.Error()),
-				)
-			}
-			// Continue with empty set - we'll rely on retry if there's a conflict
-			usedPorts = make(map[int]bool)
-		}
-
-		// Pick an available port (excluding used ones)
-		port, err := c.portManager.PickPortExcluding(usedPorts)
-		if err != nil {
-			return nil, fmt.Errorf("bitbrowser: failed to allocate port: %w", err)
-		}
-
-		if c.logger != nil {
-			c.logger.Debug("bitbrowser: attempting to open browser with managed port",
-				slog.Int("port", port),
-				slog.Int("attempt", attempt),
-				slog.Int("max_retries", maxRetries),
-				slog.Int("excluded_ports", len(usedPorts)),
-			)
-		}
-
-		// Build Chrome arguments with managed port
-		args := c.buildManagedArgs(port, opts)
-
-		// Build request
-		// Note: In headless mode, NewPageUrl must be empty (official doc requirement)
-		// "Multiple targets are not supported in headless mode"
-		startURL := opts.StartURL
-		if opts.Headless {
-			startURL = ""
-		}
-		config := OpenConfig{
-			ID:                id,
-			Args:              args,
-			Queue:             true,
-			IgnoreDefaultUrls: opts.IgnoreDefaultUrls || opts.Headless,
-			NewPageUrl:        startURL,
-		}
-
-		result, err := c.doOpenRequest(ctx, config)
-		if err == nil {
-			// CRITICAL: Verify this browser actually belongs to us
-			// This prevents accidentally controlling another client's browser
-			// The race condition:
-			//   1. We call GetPorts() -> port 50001 is free
-			//   2. Another client opens their browser on port 50001
-			//   3. We request port 50001 -> BitBrowser might return their browser!
-			//
-			// Solution: After opening, call GetPorts() again and verify that
-			// OUR profile ID is mapped to the port we requested.
-			verifyPorts, verifyErr := c.GetPorts(ctx)
-			if verifyErr != nil {
-				if c.logger != nil {
-					c.logger.Warn("bitbrowser: failed to verify port ownership",
-						slog.String("error", verifyErr.Error()),
-					)
-				}
-				// Continue anyway - verification failed but browser might be OK
-			} else {
-				actualPortStr := verifyPorts[id]
-				var actualPort int
-				if actualPortStr != "" {
-					fmt.Sscanf(actualPortStr, "%d", &actualPort)
-				}
-
-				if actualPort != port {
-					// DANGER: The browser we got is NOT ours!
-					// Either:
-					// 1. Our profile didn't actually open (actualPort == 0)
-					// 2. Our profile opened on a different port (shouldn't happen)
-					// 3. BitBrowser returned another browser's info
-					if c.logger != nil {
-						c.logger.Error("bitbrowser: CRITICAL port ownership mismatch",
-							slog.String("profile_id", id),
-							slog.Int("requested_port", port),
-							slog.Int("actual_port", actualPort),
-							slog.String("actual_port_str", actualPortStr),
-							slog.Int("attempt", attempt),
-						)
-					}
-					// Close the browser we opened to prevent orphan processes
-					if closeErr := c.Close(ctx, id); closeErr != nil {
-						if c.logger != nil {
-							c.logger.Warn("bitbrowser: failed to close browser after port mismatch",
-								slog.String("profile_id", id),
-								slog.String("error", closeErr.Error()),
-							)
-						}
-					}
-					lastErr = fmt.Errorf("port ownership mismatch: profile %s should be on port %d but GetPorts shows port %d", id, port, actualPort)
-					continue
-				}
-			}
-
-			// Ensure HTTP endpoint has protocol prefix
-			if result.Http != "" && !strings.HasPrefix(result.Http, "http://") {
-				result.Http = "http://" + result.Http
-			}
-			return result, nil
-		}
-
-		lastErr = err
-
-		// Check if it's a port conflict error (another program using this port)
-		if c.isPortConflictError(err) {
-			if c.logger != nil {
-				c.logger.Warn("bitbrowser: port conflict, retrying with different port",
-					slog.Int("port", port),
-					slog.Int("attempt", attempt),
-					slog.String("error", err.Error()),
-				)
-			}
-			continue
-		}
-
-		// Non-retryable error
-		return nil, err
-	}
-
-	return nil, fmt.Errorf("bitbrowser: failed to open browser after %d attempts: %w", maxRetries, lastErr)
-}
-
-// getUsedPortsSet returns a set of ports currently used by BitBrowser.
-func (c *Client) getUsedPortsSet(ctx context.Context) (map[int]bool, error) {
-	ports, err := c.GetPorts(ctx)
-	if err != nil {
-		return nil, err
-	}
-
+	// Get ports currently used by BitBrowser to avoid conflicts
 	usedPorts := make(map[int]bool)
-	for _, portStr := range ports {
-		if portStr == "" {
-			continue
-		}
-		var port int
-		if _, err := fmt.Sscanf(portStr, "%d", &port); err == nil && port > 0 {
-			usedPorts[port] = true
+	if ports, err := c.GetPorts(ctx); err == nil {
+		for _, portStr := range ports {
+			if portStr == "" {
+				continue
+			}
+			var port int
+			if _, err := fmt.Sscanf(portStr, "%d", &port); err == nil && port > 0 {
+				usedPorts[port] = true
+			}
 		}
 	}
-	return usedPorts, nil
-}
 
+	// Pick an available port
+	port, err := c.portManager.PickPortExcluding(usedPorts)
+	if err != nil {
+		return nil, fmt.Errorf("bitbrowser: failed to allocate port: %w", err)
+	}
+
+	// Build Chrome arguments with managed port
+	args := c.buildManagedArgs(port, opts)
+
+	// Build request
+	// Note: In headless mode, NewPageUrl must be empty (official doc requirement)
+	startURL := opts.StartURL
+	if opts.Headless {
+		startURL = ""
+	}
+	config := OpenConfig{
+		ID:                id,
+		Args:              args,
+		Queue:             true,
+		IgnoreDefaultUrls: opts.IgnoreDefaultUrls || opts.Headless,
+		NewPageUrl:        startURL,
+	}
+
+	result, err := c.doOpenRequest(ctx, config)
+	if err != nil {
+		return nil, fmt.Errorf("bitbrowser: open browser failed: %w", err)
+	}
+
+	// Ensure HTTP endpoint has protocol prefix
+	if result.Http != "" && !strings.HasPrefix(result.Http, "http://") {
+		result.Http = "http://" + result.Http
+	}
+	return result, nil
+}
 
 // openNative opens a browser using Native Mode (BitBrowser-managed ports).
+// If the browser is already open, BitBrowser API will return the existing connection info.
 func (c *Client) openNative(ctx context.Context, id string, opts *OpenOptions) (*OpenResult, error) {
-	// Log warning if remote access might be needed
-	if c.logger != nil && !opts.AllowLAN && opts.CustomPort == 0 {
-		c.logger.Debug("bitbrowser: Native Mode - browser may bind to 127.0.0.1. " +
-			"For remote access, use WithPortRange() to enable Managed Mode.")
-	}
-
 	// Build Chrome arguments from options
 	args := c.buildNativeArgs(opts)
 
 	// Build request
 	// Note: In headless mode, NewPageUrl must be empty (official doc requirement)
-	// "Multiple targets are not supported in headless mode"
 	startURL := opts.StartURL
 	if opts.Headless {
 		startURL = ""
@@ -553,10 +437,6 @@ func (c *Client) openNative(ctx context.Context, id string, opts *OpenOptions) (
 		return nil, fmt.Errorf("bitbrowser: open browser failed: %w", err)
 	}
 	if !resp.Success {
-		// Check if browser is still starting
-		if opts.WaitReady && strings.Contains(resp.Msg, "正在打开") {
-			return c.waitForBrowserReady(ctx, id, opts)
-		}
 		return nil, fmt.Errorf("bitbrowser: open browser failed: %s", resp.Msg)
 	}
 
@@ -570,13 +450,9 @@ func (c *Client) openNative(ctx context.Context, id string, opts *OpenOptions) (
 		result.Http = "http://" + result.Http
 	}
 
-	// If result is empty but WaitReady is enabled, wait for browser
-	if result.Http == "" && opts.WaitReady {
-		return c.waitForBrowserReady(ctx, id, opts)
-	}
-
 	return &result, nil
 }
+
 
 // buildManagedArgs builds Chrome arguments for Managed Mode.
 // It always includes port binding to 0.0.0.0 for remote access.
@@ -672,21 +548,6 @@ func (c *Client) doOpenRequest(ctx context.Context, config OpenConfig) (*OpenRes
 	return &result, nil
 }
 
-// isPortConflictError checks if an error indicates a port conflict.
-func (c *Client) isPortConflictError(err error) bool {
-	if err == nil {
-		return false
-	}
-	errMsg := strings.ToLower(err.Error())
-	// Common port conflict indicators - be specific to avoid false positives
-	// (e.g., "profile already opened" is NOT a port conflict)
-	return strings.Contains(errMsg, "address already in use") ||
-		strings.Contains(errMsg, "port is already in use") ||
-		strings.Contains(errMsg, "端口被占用") ||
-		strings.Contains(errMsg, "端口已被") ||
-		strings.Contains(errMsg, "port occupied") ||
-		strings.Contains(errMsg, "bind: address already in use")
-}
 
 // OpenRaw opens a browser using the raw API configuration.
 // Use this when you need full control over the request parameters.

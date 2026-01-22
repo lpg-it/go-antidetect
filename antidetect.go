@@ -102,11 +102,6 @@ var WithRetryConfig = bitbrowser.WithRetryConfig
 // unreachable from remote hosts. Recommended range: MinPort=50000, MaxPort=51000.
 var WithPortRange = bitbrowser.WithPortRange
 
-// WithPortRetries sets the maximum number of retry attempts for port allocation.
-// Only applicable when Managed Mode is enabled via WithPortRange.
-// Default is 10 retries.
-var WithPortRetries = bitbrowser.WithPortRetries
-
 // NewBitBrowser creates a new BitBrowser client.
 // apiURL should be the BitBrowser API endpoint, e.g., "http://127.0.0.1:54345".
 //
